@@ -7,29 +7,19 @@
   <link rel="stylesheet" href="{{ css_href }}">
   <style>
     :root {
-      --cell-size: {{ cell_mm }}mm;
+      --grid-size-mm: {{ grid_mm }}mm;
     }
   </style>
 </head>
 <body>
-  <section class="page page-grid">
+  <section class="page page-grid" aria-label="Σελίδα πλέγματος">
     <h1 class="visually-hidden">{{ title }} — Πλέγμα</h1>
     <div class="grid-wrap">
-      <table class="crossword-grid" aria-label="Πλέγμα σταυρόλεξου">
-        {% for row in grid_rows %}
-        <tr>
-          {% for cell in row %}
-          <td class="cell {% if cell.is_black %}black{% else %}white{% endif %}">
-            {% if not cell.is_black %}{{ cell.letter }}{% endif %}
-          </td>
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </table>
+      {{ grid_svg | safe }}
     </div>
   </section>
 
-  <section class="page page-words">
+  <section class="page page-words {{ words_layout_class }}" aria-label="Σελίδα λέξεων">
     <h1 class="words-title">Λέξεις ({{ total_words }})</h1>
     {% for group in word_groups %}
     <div class="word-group">

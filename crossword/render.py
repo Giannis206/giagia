@@ -8,22 +8,66 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from crossword.grid import BLACK, Grid
-from crossword.slots import Slot
+
+# A4 portrait printable area with 5mm @page margins (210 - 10 = 200mm wide)
+PRINT_GRID_MM = 200.0
+CELL_UNITS = 100
+LINE_WIDTH = 8
 
 
-def _build_grid_rows(grid: Grid, *, show_letters: bool = False) -> list[list[dict]]:
-    rows: list[list[dict]] = []
-    for r in range(grid.size):
-        row: list[dict] = []
-        for c in range(grid.size):
-            val = grid.get(r, c)
-            is_black = val == BLACK
-            letter = ""
-            if not is_black and show_letters and val not in (".", " "):
-                letter = val
-            row.append({"is_black": is_black, "letter": letter})
-        rows.append(row)
-    return rows
+def _build_grid_svg(grid: Grid, *, show_letters: bool = False) -> str:
+    """Sharp SVG grid — ideal for print/PDF (no table border-collapse artifacts)."""
+    size = grid.size
+    span = size * CELL_UNITS
+    parts: list[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {span} {span}" '
+        f'class="crossword-svg" '
+        f'role="img" aria-label="Πλέγμα σταυρόλεξου" '
+        f'shape-rendering="geometricPrecision">',
+        f'<rect x="0" y="0" width="{span}" height="{span}" fill="#ffffff"/>',
+    ]
+
+    for row in range(size):
+        for col in range(size):
+            if grid.is_black(row, col):
+                x = col * CELL_UNITS
+                y = row * CELL_UNITS
+                parts.append(
+                    f'<rect x="{x}" y="{y}" width="{CELL_UNITS}" height="{CELL_UNITS}" '
+                    f'fill="#000000" stroke="none"/>'
+                )
+
+    for index in range(size + 1):
+        pos = index * CELL_UNITS
+        parts.append(
+            f'<line x1="{pos}" y1="0" x2="{pos}" y2="{span}" '
+            f'stroke="#000000" stroke-width="{LINE_WIDTH}" stroke-linecap="square"/>'
+        )
+        parts.append(
+            f'<line x1="0" y1="{pos}" x2="{span}" y2="{pos}" '
+            f'stroke="#000000" stroke-width="{LINE_WIDTH}" stroke-linecap="square"/>'
+        )
+
+    if show_letters:
+        font_size = CELL_UNITS * 0.58
+        for row in range(size):
+            for col in range(size):
+                val = grid.get(row, col)
+                if val in (BLACK, ".", " "):
+                    continue
+                cx = col * CELL_UNITS + CELL_UNITS / 2
+                cy = row * CELL_UNITS + CELL_UNITS / 2
+                parts.append(
+                    f'<text x="{cx:.1f}" y="{cy:.1f}" '
+                    f'text-anchor="middle" dominant-baseline="central" '
+                    f'font-family="Segoe UI, Arial, sans-serif" '
+                    f'font-size="{font_size:.1f}" font-weight="700" fill="#000000">'
+                    f"{val}</text>"
+                )
+
+    parts.append("</svg>")
+    return "\n".join(parts)
 
 
 def _group_words_by_length(words: list[str]) -> list[dict]:
@@ -34,6 +78,14 @@ def _group_words_by_length(words: list[str]) -> list[dict]:
         {"length": length, "words": sorted(group)}
         for length, group in sorted(groups.items())
     ]
+
+
+def _words_layout_class(total_words: int, grid_size: int) -> str:
+    if total_words > 55 or (grid_size >= 12 and total_words > 38):
+        return "words-dense"
+    if total_words > 30 or (grid_size >= 10 and total_words > 24):
+        return "words-medium"
+    return "words-sparse"
 
 
 def render_printable_html(
@@ -54,24 +106,18 @@ def render_printable_html(
     template = env.get_template("print.html")
 
     css_rel = css_href if css_href is not None else "../static/print.css"
-    cell_mm = _cell_size_mm(grid.size)
 
     html = template.render(
         title=title,
         css_href=css_rel,
-        grid_rows=_build_grid_rows(grid, show_letters=show_letters),
+        grid_svg=_build_grid_svg(grid, show_letters=show_letters),
         grid_size=grid.size,
-        cell_mm=cell_mm,
+        grid_mm=PRINT_GRID_MM,
         word_groups=_group_words_by_length(words),
         total_words=len(words),
+        words_layout_class=_words_layout_class(len(words), grid.size),
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
     return output_path
-
-
-def _cell_size_mm(grid_size: int) -> float:
-    """Fit grid on A4 with minimal margins (~8mm each side, ~281mm usable height)."""
-    usable = 274.0
-    return round(usable / grid_size, 2)
