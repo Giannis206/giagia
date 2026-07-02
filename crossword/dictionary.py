@@ -141,8 +141,19 @@ def load_dictionary(
     data_dir: Path,
     *,
     strict: bool = True,
+    use_db: bool = True,
 ) -> tuple[dict[int, set[str]], dict[str, int]]:
-    """Load validated dictionary and per-word scores."""
+    """Load validated dictionary and per-word scores.
+
+    Prefers SQLite ``greek_words.db`` when present; falls back to words_*.txt.
+    """
+    db_path = data_dir / "greek_words.db"
+    if use_db and db_path.exists():
+        from crossword.word_store import get_word_store
+
+        store = get_word_store(data_dir)
+        return store.as_solver_dicts()
+
     dictionary: dict[int, set[str]] = {}
     scores: dict[str, int] = {}
 

@@ -88,10 +88,14 @@ crossword/
   grid.py       # πλέγμα + συμμετρικό pattern
   slots.py      # εξαγωγή across/down slots
   validate.py   # κανόνες επικύρωσης
+  dictionary.py # normalization + validation rules
+  word_store.py # SQLite word DB + in-memory index
   solver.py     # backtracking + MRV heuristic
   render.py     # HTML output
 data/
-  words_3.txt … words_8.txt
+  greek_words.db      # build via scripts/build_word_db.py
+  words_3.txt … words_12.txt
+  sources/el_50k.txt
 templates/
   print.html
 static/
@@ -100,12 +104,28 @@ output/
   crossword.html
 ```
 
-## Λεξικό
+## Λεξικό (Plan B — SQLite)
 
-Πρόσθεσε δικές σου λέξεις στα `data/words_N.txt` (μία λέξη ανά γραμμή, κεφαλαία ελληνικά, χωρίς τόνους). Κάθε αρχείο πρέπει να περιέχει λέξεις μήκους `N` μόνο. Τα sample αρχεία περιλαμβάνουν και κοινούς ελληνικούς συνδυασμούς γραμμάτων ώστε να ολοκληρώνεται ευκολότερα η γέμιση — μπορείς να τα αντικαταστήσεις σταδιακά με πραγματικό λεξικό.
+Η βάση λέξεων είναι τοπικό SQLite αρχείο `data/greek_words.db` (~48.000+ πραγματικές ελληνικές λέξεις, μήκη 3–12).
+
+### Χτίσιμο βάσης
+
+```bash
+python scripts/build_word_db.py --download
+python scripts/validate_word_db.py
+```
+
+Πηγές: `SUBTLEX-GR_restricted.txt`, `data/sources/el_50k.txt`, `curated_el.txt`, `words_*.txt`, και οποιοδήποτε `data/sources/*.{txt,csv,json}`.
+
+### Δοκιμές generation
+
+```bash
+python scripts/test_generation.py
+```
 
 ## Σημειώσεις
 
 - Προεπιλογή πλέγματος: **7×7** (~39mm κελιά στο Α4 — ιδανικό για χαμηλή όραση)
-- Αν αποτύχει η γέμιση, ο γεννήτορας ξαναδοκιμάζει αυτόματα με νέο pattern/seed
+- Αν αποτύχει η γέμιση, εμφανίζεται καθαρό μήνυμα σφάλματος (χωρίς ψεύτικες λέξεις)
 - Το `--seed` δίνει επαναλήψιμη δημιουργία
+- Μεγέθη: 7×7 και 10×10 είναι αξιόπιστα· 8×8 μερικώς· 12×12 ακόμα ασταθές
