@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="{{ css_href }}">
+  <style>
+    :root {
+      --cell-size: {{ cell_mm }}mm;
+    }
+  </style>
+</head>
+<body>
+  <section class="page page-grid">
+    <h1 class="visually-hidden">{{ title }} — Πλέγμα</h1>
+    <div class="grid-wrap">
+      <table class="crossword-grid" aria-label="Πλέγμα σταυρόλεξου">
+        {% for row in grid_rows %}
+        <tr>
+          {% for cell in row %}
+          <td class="cell {% if cell.is_black %}black{% else %}white{% endif %}">
+            {% if not cell.is_black %}{{ cell.letter }}{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </section>
+
+  <section class="page page-words">
+    <h1 class="words-title">Λέξεις ({{ total_words }})</h1>
+    {% for group in word_groups %}
+    <div class="word-group">
+      <h2>{{ group.length }} γράμματα</h2>
+      <ul class="word-list">
+        {% for word in group.words %}
+        <li>{{ word }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </section>
+</body>
+</html>
