@@ -5,7 +5,7 @@
 ## Απαιτήσεις
 
 - Python 3.11+
-- Jinja2 (μόνο για HTML templating)
+- Jinja2 + Flask (μόνο για HTML templating και τοπικό UI)
 
 ## Εγκατάσταση
 
@@ -24,7 +24,26 @@ pip install -r requirements.txt
 
 ## Χρήση
 
-### Διαδραστικό μενού
+### Συντόμευση επιφάνειας εργασίας (Windows — χωρίς terminal)
+
+1. Κάνε διπλό κλικ στο `start_silent.vbs` για δοκιμή (ξεκινά server + ανοίγει Microsoft Edge).
+2. **Δημιουργία συντόμευσης:**
+   - Right-click στο `start_silent.vbs` → **Create shortcut**
+   - Σύρε τη συντόμευση στην Επιφάνεια Εργασίας
+   - (Προαιρετικά) Right-click στη συντόμευση → **Properties** → **Change Icon** για αναγνωρίσιμο εικονίδιο
+3. Από εδώ και πέρα: **διπλό κλικ** → Edge → UI στο `http://localhost:5000` (ή `5001` αν η 5000 είναι κατειλημμένη).
+
+Το UI έχει μεγάλα κουμπιά:
+- **Δημιουργία νέου σταυρόλεξου**
+- **Επανάληψη** (νέο τυχαίο)
+- **Άνοιγμα για εκτύπωση** (ανοίγει `/print` με dialog εκτύπωσης)
+- **Κλείσιμο server**
+
+Αρχεία εκκίνησης:
+- `start_silent.vbs` — χωρίς ορατό παράθυρο CMD (για τη συντόμευση)
+- `start.bat` — ίδια λειτουργία, ελάχιστο minimized CMD
+
+### Διαδραστικό μενού (CLI)
 
 ```bash
 python main.py
@@ -62,6 +81,9 @@ python main.py --generate --size 13 --open
 
 ```
 main.py
+app.py              # τοπικό Flask UI (localhost:5000)
+start.bat
+start_silent.vbs    # launcher χωρίς CMD — για συντόμευση
 crossword/
   grid.py       # πλέγμα + συμμετρικό pattern
   slots.py      # εξαγωγή across/down slots

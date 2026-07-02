@@ -44,6 +44,7 @@ def render_printable_html(
     project_root: Path,
     title: str = "Σταυρόλεξο",
     show_letters: bool = False,
+    css_href: str | None = None,
 ) -> Path:
     templates_dir = project_root / "templates"
     env = Environment(
@@ -52,7 +53,7 @@ def render_printable_html(
     )
     template = env.get_template("print.html")
 
-    css_rel = "../static/print.css"
+    css_rel = css_href if css_href is not None else "../static/print.css"
     cell_mm = _cell_size_mm(grid.size)
 
     html = template.render(

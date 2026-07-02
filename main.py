@@ -18,6 +18,8 @@ OUTPUT_DIR = ROOT / "output"
 HTML_PATH = OUTPUT_DIR / "crossword.html"
 META_PATH = OUTPUT_DIR / "crossword_meta.json"
 
+ALLOWED_SIZES = (7, 8, 10, 12, 15)
+
 
 def _configure_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
@@ -40,7 +42,13 @@ def _save_meta(seed: int | None, size: int, word_count: int) -> None:
     )
 
 
-def do_generate(*, seed: int | None, size: int, allow_reuse: bool) -> None:
+def do_generate(
+    *,
+    seed: int | None,
+    size: int,
+    allow_reuse: bool = False,
+    css_href: str | None = None,
+) -> dict[str, int | str]:
     print("Δημιουργία σταυρόλεξου...")
     result = generate_crossword_with_fallback(
         data_dir=DATA_DIR,
@@ -54,10 +62,16 @@ def do_generate(*, seed: int | None, size: int, allow_reuse: bool) -> None:
         HTML_PATH,
         project_root=ROOT,
         show_letters=False,
+        css_href=css_href,
     )
     _save_meta(seed, size, len(result.words))
     print(f"Έτοιμο: {HTML_PATH}")
     print(f"Λέξεις: {len(result.words)} | Μέγεθος πλέγματος: {size}x{size}")
+    return {
+        "words": len(result.words),
+        "size": result.grid.size,
+        "path": str(HTML_PATH),
+    }
 
 
 def do_open_preview() -> None:
@@ -108,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         "--size",
         type=int,
         default=7,
-        choices=[7, 9, 11, 13, 15],
+        choices=[7, 8, 10, 12, 15],
         help="Μέγεθος πλέγματος (προεπιλογή: 7 για μεγαλύτερα κελιά στην εκτύπωση)",
     )
     parser.add_argument(

@@ -15,8 +15,8 @@ class Grid:
     """Square crossword grid."""
 
     def __init__(self, size: int, cells: Optional[list[list[str]]] = None):
-        if size < 5 or size % 2 == 0:
-            raise ValueError("Grid size must be an odd integer >= 5")
+        if size < 5:
+            raise ValueError("Grid size must be an integer >= 5")
         self.size = size
         if cells is not None:
             self.cells = deepcopy(cells)
@@ -39,6 +39,7 @@ class Grid:
         return self.cells[row][col] != BLACK
 
     def mirror(self, row: int, col: int) -> tuple[int, int]:
+        """180° rotational symmetry: (r, c) ↔ (size-1-r, size-1-c)."""
         return self.size - 1 - row, self.size - 1 - col
 
     def set_symmetric(self, row: int, col: int, value: str) -> None:
@@ -74,6 +75,7 @@ class Grid:
 
 
 def _symmetric_positions(size: int) -> list[tuple[int, int]]:
+    """One representative per symmetric pair (or singleton on odd-sized center)."""
     positions: list[tuple[int, int]] = []
     for r in range(size):
         for c in range(size):
