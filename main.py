@@ -10,7 +10,7 @@ import webbrowser
 from pathlib import Path
 
 from crossword.render import render_printable_html
-from crossword.solver import generate_crossword_with_fallback
+from crossword.solver import CrosswordGenerationError, generate_crossword
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
@@ -49,13 +49,19 @@ def do_generate(
     allow_reuse: bool = False,
     css_href: str | None = None,
 ) -> dict[str, int | str]:
+    if allow_reuse:
+        print("Σημείωση: η επανάχρηση λέξεων απενεργοποιείται — μόνο πραγματικές λέξεις.")
     print("Δημιουργία σταυρόλεξου...")
-    result = generate_crossword_with_fallback(
-        data_dir=DATA_DIR,
-        size=size,
-        seed=seed,
-        allow_reuse=allow_reuse,
-    )
+    try:
+        result = generate_crossword(
+            data_dir=DATA_DIR,
+            size=size,
+            seed=seed,
+        )
+    except CrosswordGenerationError as exc:
+        if exc.diagnostics:
+            print(f"Αποτυχία: {exc.diagnostics}")
+        raise
     render_printable_html(
         result.grid,
         result.words,

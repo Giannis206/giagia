@@ -10,6 +10,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 from main import ALLOWED_SIZES, do_generate
+from crossword.solver import CrosswordGenerationError, USER_FAILURE_MESSAGE
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = ROOT / "output"
@@ -61,6 +62,8 @@ def generate():
             css_href="/static/print.css",
         )
         return jsonify(ok=True, words=result["words"], size=result["size"])
+    except CrosswordGenerationError:
+        return jsonify(ok=False, error=USER_FAILURE_MESSAGE), 422
     except Exception as exc:
         return jsonify(ok=False, error=str(exc)), 500
 

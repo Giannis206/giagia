@@ -2,15 +2,16 @@
   {
     "size": 7,
     "pattern": [
-      "####...",
-      "#......",
-      "#......",
+      "...#...",
+      "...#...",
       ".......",
-      "......#",
-      "......#",
-      "...####"
+      "##...##",
+      ".......",
+      "...#...",
+      "...#..."
     ],
-    "pattern_seed": 2,
-    "slots": 14
+    "pattern_seed": 6,
+    "slots": 22,
+    "note": "Validated solvable pattern with real dictionary words"
   }
 ]
