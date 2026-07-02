@@ -10,13 +10,23 @@ import webbrowser
 from pathlib import Path
 
 from crossword.render import render_printable_html
-from crossword.solver import generate_crossword
+from crossword.solver import generate_crossword_with_fallback
 
 ROOT = Path(__file__).resolve().parent
 DATA_DIR = ROOT / "data"
 OUTPUT_DIR = ROOT / "output"
 HTML_PATH = OUTPUT_DIR / "crossword.html"
 META_PATH = OUTPUT_DIR / "crossword_meta.json"
+
+
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8")
+            except (AttributeError, ValueError, OSError):
+                pass
 
 
 def _save_meta(seed: int | None, size: int, word_count: int) -> None:
@@ -32,7 +42,7 @@ def _save_meta(seed: int | None, size: int, word_count: int) -> None:
 
 def do_generate(*, seed: int | None, size: int, allow_reuse: bool) -> None:
     print("Δημιουργία σταυρόλεξου...")
-    result = generate_crossword(
+    result = generate_crossword_with_fallback(
         data_dir=DATA_DIR,
         size=size,
         seed=seed,
@@ -86,6 +96,7 @@ def interactive_menu(default_seed: int | None, size: int, allow_reuse: bool) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(description="Τοπικός γεννήτορας ελληνικού σταυρόλεξου")
     parser.add_argument(
         "--seed",
@@ -96,9 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--size",
         type=int,
-        default=11,
-        choices=[9, 11, 13, 15],
-        help="Μέγεθος πλέγματος (προεπιλογή: 11 για μεγαλύτερα κελιά στην εκτύπωση)",
+        default=7,
+        choices=[7, 9, 11, 13, 15],
+        help="Μέγεθος πλέγματος (προεπιλογή: 7 για μεγαλύτερα κελιά στην εκτύπωση)",
     )
     parser.add_argument(
         "--allow-reuse",

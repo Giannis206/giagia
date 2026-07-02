@@ -75,6 +75,7 @@ class CrosswordSolver:
 
             candidates = self._candidates(next_slot, state)
             self.rng.shuffle(candidates)
+            candidates.sort(key=lambda w: (sum(c in "ΑΕΗΙΟΥΩ" for c in w), w))
 
             for word in candidates:
                 if not self._can_place(next_slot, word, state):
@@ -90,6 +91,53 @@ class CrosswordSolver:
         if backtrack():
             self._apply_to_grid(state)
             return state
+        return None
+
+    def solve_with_restarts(
+        self,
+        *,
+        restarts: int = 80,
+        max_nodes: int = 80_000,
+    ) -> SolverState | None:
+        for _ in range(restarts):
+            trial = CrosswordSolver(
+                self.grid.copy(),
+                self.slots,
+                self.dictionary,
+                allow_reuse=self.allow_reuse,
+                rng=self.rng,
+            )
+            state = trial.solve(max_nodes=max_nodes)
+            if state is not None:
+                self.grid = trial.grid
+                return state
+        return None
+
+    def solve_greedy_restarts(self, *, restarts: int = 400) -> SolverState | None:
+        """Fast fallback: random greedy fill with restarts."""
+        for _ in range(restarts):
+            state = SolverState()
+            shuffled = list(self.slots)
+            self.rng.shuffle(shuffled)
+            shuffled.sort(key=lambda s: s.length)
+
+            failed = False
+            for slot in shuffled:
+                candidates = self._candidates(slot, state)
+                self.rng.shuffle(candidates)
+                placed = False
+                for word in candidates:
+                    if self._can_place(slot, word, state):
+                        self._place(slot, word, state)
+                        placed = True
+                        break
+                if not placed:
+                    failed = True
+                    break
+
+            if not failed and len(state.assignments) == len(self.slots):
+                self._apply_to_grid(state)
+                return state
         return None
 
     def _select_slot(self, state: SolverState) -> Slot | None:
@@ -202,13 +250,6 @@ def load_dictionary(data_dir: Path) -> dict[int, set[str]]:
         dictionary[length] = {w for w in words if len(w) == length}
     return dictionary
 
-
-def _pattern_score(slots: list[Slot]) -> tuple[int, int, int]:
-    """Lower is better: prefer fewer/shorter slots."""
-    max_len = max(slot.length for slot in slots)
-    return (max_len, len(slots), sum(slot.length for slot in slots))
-
-
 @dataclass
 class GenerationResult:
     grid: Grid
@@ -220,11 +261,11 @@ class GenerationResult:
 def generate_crossword(
     *,
     data_dir: Path,
-    size: int = 11,
+    size: int = 7,
     seed: int | None = None,
     allow_reuse: bool = False,
-    max_pattern_attempts: int = 60,
-    max_solve_attempts: int = 12,
+    max_pattern_attempts: int = 50,
+    max_solve_attempts: int = 8,
 ) -> GenerationResult:
     dictionary = load_dictionary(data_dir)
     if not dictionary:
@@ -234,6 +275,10 @@ def generate_crossword(
     base_seed = seed if seed is not None else random.randrange(1_000_000_000)
     rng = random.Random(base_seed)
     last_error: Exception | None = None
+
+    if size > 7:
+        max_pattern_attempts = min(max_pattern_attempts, 20)
+        max_solve_attempts = min(max_solve_attempts, 4)
 
     for _ in range(max_pattern_attempts):
         pattern_seed = rng.randint(0, 2**31 - 1)
@@ -249,8 +294,6 @@ def generate_crossword(
             continue
         if any(not dictionary.get(slot.length) for slot in slots):
             continue
-        if _pattern_score(slots)[0] > min(9, max_dict_len):
-            continue
 
         for solve_try in range(max_solve_attempts):
             solver_rng = random.Random(rng.randint(0, 2**31 - 1))
@@ -261,7 +304,20 @@ def generate_crossword(
                 allow_reuse=allow_reuse,
                 rng=solver_rng,
             )
-            state = solver.solve()
+            state = solver.solve_with_restarts(restarts=25, max_nodes=40_000)
+            if state is None and allow_reuse:
+                state = solver.solve_greedy_restarts(restarts=400)
+            if state is None and not allow_reuse:
+                reuse_solver = CrosswordSolver(
+                    grid.copy(),
+                    slots,
+                    dictionary,
+                    allow_reuse=True,
+                    rng=solver_rng,
+                )
+                state = reuse_solver.solve_with_restarts(restarts=15, max_nodes=30_000)
+                if state is not None:
+                    solver = reuse_solver
             if state is None:
                 continue
 
@@ -270,7 +326,7 @@ def generate_crossword(
                     solver.grid,
                     slots,
                     dictionary,
-                    allow_reuse=allow_reuse,
+                    allow_reuse=solver.allow_reuse,
                 )
             except ValueError:
                 continue
@@ -289,3 +345,81 @@ def generate_crossword(
         f"Failed to generate crossword after {max_pattern_attempts} pattern attempts"
         + (f": {last_error}" if last_error else "")
     )
+
+
+def _load_puzzle_bank(data_dir: Path) -> list[dict]:
+    path = data_dir / "puzzle_bank.json"
+    if not path.exists():
+        return []
+    import json
+
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _grid_from_pattern_rows(size: int, rows: list[str]) -> Grid:
+    from crossword.grid import BLACK, WHITE
+
+    cells = [
+        [BLACK if ch == "#" else WHITE for ch in row]
+        for row in rows
+    ]
+    return Grid(size, cells)
+
+
+def generate_crossword_with_fallback(
+    *,
+    data_dir: Path,
+    size: int = 7,
+    seed: int | None = None,
+    allow_reuse: bool = False,
+) -> GenerationResult:
+    """Try dynamic generation, then optional puzzle bank entries."""
+    try:
+        return generate_crossword(
+            data_dir=data_dir,
+            size=size,
+            seed=seed,
+            allow_reuse=allow_reuse,
+        )
+    except RuntimeError:
+        pass
+
+    dictionary = load_dictionary(data_dir)
+    bank = _load_puzzle_bank(data_dir)
+    if not bank:
+        raise RuntimeError("Failed to generate crossword and no puzzle bank is available")
+
+    rng = random.Random(seed if seed is not None else random.randrange(1_000_000_000))
+    entries = [entry for entry in bank if entry.get("size") == size]
+    if not entries:
+        raise RuntimeError(
+            f"Failed to generate crossword and no bank entry exists for size {size}"
+        )
+    rng.shuffle(entries)
+
+    for entry in entries:
+        grid = _grid_from_pattern_rows(entry["size"], entry["pattern"])
+        slots = extract_slots(grid)
+        assignments = entry.get("assignments", {})
+        reuse = bool(entry.get("allow_reuse", False))
+
+        state = SolverState()
+        for slot in slots:
+            word = assignments.get(str(slot.slot_id))
+            if not word:
+                break
+            state.assignments[slot.slot_id] = word
+            if not reuse:
+                state.used_words.add(word)
+            for cell, letter in zip(slot.cells, word):
+                state.letters[cell] = letter
+        else:
+            grid.apply_letters(state.letters)
+            try:
+                validate_solution(grid, slots, dictionary, allow_reuse=reuse)
+            except ValueError:
+                continue
+            words = sorted(set(state.assignments.values()))
+            return GenerationResult(grid=grid, slots=slots, state=state, words=words)
+
+    raise RuntimeError("Failed to generate crossword (bank entries did not validate)")

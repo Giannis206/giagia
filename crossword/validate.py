@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque
 
-from crossword.grid import BLACK, EMPTY, WHITE, Grid
+from crossword.grid import BLACK, WHITE, Grid
 from crossword.slots import MIN_SLOT_LENGTH, Slot, extract_slots, slots_by_cell
 
 
@@ -38,7 +38,7 @@ def validate_solution(
                 f"Slot {slot.slot_id} ({slot.direction}) has wrong length: "
                 f"{len(word)} != {slot.length}"
             )
-        if any(ch in (WHITE, EMPTY, BLACK) for ch in word):
+        if any(ch in (WHITE, BLACK) for ch in word):
             raise ValueError(
                 f"Slot {slot.slot_id} ({slot.direction}) contains unfilled cells"
             )
@@ -114,7 +114,7 @@ def _validate_no_orphan_letters(grid: Grid, slots: list[Slot]) -> None:
     for r in range(grid.size):
         for c in range(grid.size):
             val = grid.get(r, c)
-            if val in (BLACK, WHITE, EMPTY):
+            if val in (BLACK, WHITE):
                 continue
             if (r, c) not in slot_cells:
                 raise ValueError(f"Orphan letter '{val}' at ({r}, {c}) outside any slot")
