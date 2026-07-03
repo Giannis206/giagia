@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 from crossword.grid import BLACK, Grid, WHITE
 from crossword.slots import extract_slots
+from crossword.slot_policy import slot_length_histogram
 from crossword.validate import validate_pattern
 
 # 0 = white (letter cell), 1 = black block
@@ -28,6 +29,9 @@ class PatternEntry:
     max_slot_length: int
     total_slot_count: int
     tier: PatternTier
+    slot_histogram: dict[int, int] | None = None
+    black_square_count: int = 0
+    layout_score: float = 0.0
 
     @property
     def name(self) -> str:
@@ -313,6 +317,20 @@ def pattern_selection_weight(
     tracker: PatternStatsTracker | None = None,
 ) -> float:
     """Higher weight for lower max slot length, richer slot counts, and runtime success."""
+    grid_size = len(entry.grid)
+    runtime = tracker.runtime_weight(entry.id) if tracker is not None else 1.0
+
+    if grid_size == 7 and entry.layout_score > 0:
+        from crossword.pattern7 import pattern7_selection_weight
+
+        return pattern7_selection_weight(
+            layout_score=entry.layout_score,
+            slot_histogram=entry.slot_histogram,
+            total_slot_count=entry.total_slot_count,
+            tier=entry.tier,
+            tracker_weight=runtime,
+        )
+
     weight = 1.0
     weight += (13 - entry.max_slot_length) * 3.0
     weight += min(entry.total_slot_count, 60) * 0.08
@@ -320,8 +338,7 @@ def pattern_selection_weight(
         weight -= 3.0
     if entry.tier == "primary":
         weight += 1.5
-    if tracker is not None:
-        weight *= tracker.runtime_weight(entry.id)
+    weight *= runtime
     return max(0.2, weight)
 
 
@@ -371,15 +388,143 @@ PATTERN_CATALOG_12: list[tuple[str, list[list[int]]]] = [
     (entry.id, entry.grid) for entry in PATTERN_ENTRIES_12
 ]
 
+def _entry_7(
+    pattern_id: str,
+    source_seed: int | None,
+    pattern: list[list[int]],
+    tier: PatternTier,
+) -> PatternEntry:
+    from crossword.pattern7 import score_pattern_histogram
+
+    grid = pattern_to_grid(pattern)
+    slots = extract_slots(grid)
+    lengths = [slot.length for slot in slots]
+    hist = slot_length_histogram(lengths)
+    blacks = sum(sum(row) for row in pattern)
+    score = score_pattern_histogram(hist, total_slots=len(slots), black_square_count=blacks)
+    return PatternEntry(
+        id=pattern_id,
+        source_seed=source_seed,
+        grid=pattern,
+        max_slot_length=max(lengths) if lengths else 0,
+        total_slot_count=len(slots),
+        tier=tier,
+        slot_histogram=hist,
+        black_square_count=blacks,
+        layout_score=score,
+    )
+
+
+# 7x7 catalog — rotationally symmetric layouts from discovery search.
+_P7_A = [
+    [0, 0, 0, 0, 0, 1, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 1, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0],
+]
+
+_P7_B = [
+    [0, 0, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 0],
+]
+
+_P7_C = [
+    [1, 0, 0, 0, 0, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 1],
+]
+
+_P7_D = [
+    [1, 1, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 1],
+]
+
+_P7_E = [
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+]
+
+_P7_FB_F = [
+    [1, 0, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 1],
+]
+
+_P7_FB_G = [
+    [1, 0, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 1],
+]
+
+_P7_FB_H = [
+    [1, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1],
+]
+
+PATTERN_ENTRIES_7: list[PatternEntry] = [
+    _entry_7("p7_a_seed12", 12, _P7_A, "primary"),
+    _entry_7("p7_b_seed42", 42, _P7_B, "primary"),
+    _entry_7("p7_c_seed5", 5, _P7_C, "primary"),
+    _entry_7("p7_d_seed1", 1, _P7_D, "primary"),
+    _entry_7("p7_e_seed177", 177, _P7_E, "primary"),
+    _entry_7("p7_fb_seed4", 4, _P7_FB_F, "fallback"),
+    _entry_7("p7_fb_seed95", 95, _P7_FB_G, "fallback"),
+    _entry_7("p7_fb_seed23", 23, _P7_FB_H, "fallback"),
+]
+
+PATTERNS_7: list[list[list[int]]] = [entry.grid for entry in PATTERN_ENTRIES_7]
+
+PATTERN_CATALOG_7: list[tuple[str, list[list[int]]]] = [
+    (entry.id, entry.grid) for entry in PATTERN_ENTRIES_7
+]
+
 PATTERNS_BY_SIZE: dict[int, list[list[list[int]]]] = {
+    7: PATTERNS_7,
     12: PATTERNS_12,
 }
 
 CATALOG_BY_SIZE: dict[int, list[tuple[str, list[list[int]]]]] = {
+    7: PATTERN_CATALOG_7,
     12: PATTERN_CATALOG_12,
 }
 
 ENTRIES_BY_SIZE: dict[int, list[PatternEntry]] = {
+    7: PATTERN_ENTRIES_7,
     12: PATTERN_ENTRIES_12,
 }
 
@@ -398,6 +543,20 @@ def get_pattern_entries(size: int, *, tier: PatternTier | None = None) -> list[P
     if tier is None:
         return list(entries)
     return [entry for entry in entries if entry.tier == tier]
+
+
+def select_7_pattern_order(
+    rng: random.Random,
+    *,
+    tracker: PatternStatsTracker | None = None,
+) -> list[PatternEntry]:
+    """Primary 7x7 patterns first, then fallback (weighted by layout score)."""
+    primary = get_pattern_entries(7, tier="primary")
+    fallback = get_pattern_entries(7, tier="fallback")
+    return (
+        weighted_pattern_order(primary, rng, tracker)
+        + weighted_pattern_order(fallback, rng, tracker)
+    )
 
 
 def select_12_pattern_order(
@@ -443,3 +602,6 @@ for _size, _plist in PATTERNS_BY_SIZE.items():
 
 for _pid, _p in PATTERN_CATALOG_12:
     _validate_stored_pattern(_p, 12)
+
+for _entry in PATTERN_ENTRIES_7:
+    _validate_stored_pattern(_entry.grid, 7)

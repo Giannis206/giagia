@@ -18,8 +18,10 @@ from crossword.patterns import (
     get_pattern_catalog,
     get_patterns,
     pattern_to_grid,
+    select_7_pattern_order,
     select_12_pattern_order,
 )
+from crossword.pattern7 import evaluate_pattern_7
 from crossword.validate import starting_letter_bias_report
 from crossword.slot_policy import (
     PatternEvaluation,
@@ -95,7 +97,14 @@ def _evaluate_slots_for_size(
     slot_lengths: list[int],
     *,
     strict_long: bool = False,
+    black_square_count: int = 0,
 ) -> PatternEvaluation:
+    if size == 7:
+        return evaluate_pattern_7(
+            slot_lengths,
+            black_square_count=black_square_count,
+            strict=strict_long,
+        )
     policy = get_slot_policy(size)
     if size == 12:
         return evaluate_pattern(policy, slot_lengths, strict_long=strict_long)
@@ -143,6 +152,32 @@ def _log_12_pattern_attempt(
         parts.append(f"score={ev.score:.2f}")
         if ev.reason != "ok":
             parts.append(f"reason={ev.reason}")
+    if elapsed is not None:
+        parts.append(f"pattern_elapsed={elapsed:.1f}s")
+    if total_elapsed is not None:
+        parts.append(f"total_elapsed={total_elapsed:.1f}s")
+    logger.info(" ".join(parts))
+
+
+def _log_7_pattern_attempt(
+    pattern_id: str,
+    *,
+    tier: str = "",
+    histogram: dict[int, int] | None = None,
+    layout_score: float = 0.0,
+    success: bool | None = None,
+    action: str = "",
+    elapsed: float | None = None,
+    total_elapsed: float | None = None,
+) -> None:
+    outcome = action or ("success" if success else "fail" if success is not None else "")
+    parts = [
+        f"7x7 pattern={pattern_id}",
+        f"tier={tier or 'n/a'}",
+        f"hist={histogram or {}}",
+        f"score={layout_score:.2f}",
+        f"result={outcome}",
+    ]
     if elapsed is not None:
         parts.append(f"pattern_elapsed={elapsed:.1f}s")
     if total_elapsed is not None:
@@ -605,7 +640,12 @@ def _try_pattern_fill(
 ) -> GenerationResult | None:
     slots = extract_slots(grid)
     lengths = [slot.length for slot in slots]
-    ev = _evaluate_slots_for_size(size, lengths, strict_long=strict_policy)
+    ev = _evaluate_slots_for_size(
+        size,
+        lengths,
+        strict_long=strict_policy,
+        black_square_count=grid.black_count(),
+    )
     tier = pattern_entry.tier if pattern_entry else ""
     total_slots = pattern_entry.total_slot_count if pattern_entry else len(slots)
     max_len = pattern_entry.max_slot_length if pattern_entry else ev.max_slot_length
@@ -620,6 +660,18 @@ def _try_pattern_fill(
             action="rejected_policy",
             total_elapsed=time.monotonic() - t0,
             ev=ev,
+        )
+        return None
+
+    if size == 7 and not ev.accepted:
+        _log_7_pattern_attempt(
+            pattern_id,
+            tier=tier,
+            histogram=ev.histogram,
+            layout_score=ev.score,
+            success=False,
+            action="rejected_policy",
+            total_elapsed=time.monotonic() - t0,
         )
         return None
 
@@ -686,6 +738,24 @@ def _try_pattern_fill(
             elapsed=pattern_elapsed,
             total_elapsed=time.monotonic() - t0,
             ev=ev,
+        )
+        get_pattern_stats_tracker().record(
+            pattern_id,
+            success=result is not None,
+            fill_seconds=pattern_elapsed,
+        )
+
+    if size == 7:
+        layout_score = pattern_entry.layout_score if pattern_entry else ev.score
+        _log_7_pattern_attempt(
+            pattern_id,
+            tier=tier,
+            histogram=ev.histogram,
+            layout_score=layout_score,
+            success=result is not None,
+            action="fill_ok" if result is not None else "fill_failed",
+            elapsed=pattern_elapsed,
+            total_elapsed=time.monotonic() - t0,
         )
         get_pattern_stats_tracker().record(
             pattern_id,
@@ -784,10 +854,60 @@ def generate_crossword(
             t0=t0,
             store=store,
             diagnostic=diagnostic,
-            strict_policy=(size == 12),
+            strict_policy=(size in (7, 12)),
         )
         if result is not None:
             return result
+
+    if size == 7:
+        pattern_tracker = get_pattern_stats_tracker()
+        pattern_order = select_7_pattern_order(rng, tracker=pattern_tracker)
+        pattern_fail_streak = 0
+        for entry in pattern_order:
+            if time.monotonic() > deadline:
+                break
+            grid = pattern_to_grid(entry.grid)
+            lengths = [s.length for s in extract_slots(grid)]
+            ev = _evaluate_slots_for_size(
+                size,
+                lengths,
+                strict_long=True,
+                black_square_count=entry.black_square_count,
+            )
+            if not ev.accepted:
+                _log_7_pattern_attempt(
+                    entry.id,
+                    tier=entry.tier,
+                    histogram=ev.histogram,
+                    layout_score=ev.score,
+                    success=False,
+                    action="rejected_policy_precheck",
+                    total_elapsed=time.monotonic() - t0,
+                )
+                continue
+            dyn_cap = budget.pattern_time_cap
+            if pattern_fail_streak >= 2:
+                dyn_cap = min(dyn_cap, 6.0)
+            result = _try_pattern_fill(
+                size=size,
+                pattern_id=entry.id,
+                grid=grid,
+                dictionary=dictionary,
+                word_scores=word_scores,
+                rng=rng,
+                diag=diag,
+                budget=budget,
+                deadline=deadline,
+                t0=t0,
+                store=store,
+                diagnostic=diagnostic,
+                strict_policy=True,
+                pattern_entry=entry,
+                pattern_time_cap=dyn_cap,
+            )
+            if result is not None:
+                return result
+            pattern_fail_streak += 1
 
     if size == 12:
         pattern_tracker = get_pattern_stats_tracker()
