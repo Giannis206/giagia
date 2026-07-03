@@ -153,7 +153,56 @@ _P12_H = [
     [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1],
 ]
 
+# Shorter max-slot patterns (seeds 89, 292, 983) — easier 12x12 fills.
+_P12_I = [
+    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1],
+    [1, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1],
+    [1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0],
+]
+
+_P12_J = [
+    [0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0],
+]
+
+_P12_K = [
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+]
+
 PATTERNS_12: list[list[list[int]]] = [
+    _P12_I,
+    _P12_J,
+    _P12_K,
     _P12_A,
     _P12_B,
     _P12_C,
@@ -164,13 +213,36 @@ PATTERNS_12: list[list[list[int]]] = [
     _P12_H,
 ]
 
+PATTERN_CATALOG_12: list[tuple[str, list[list[int]]]] = [
+    ("p12_i_seed89", _P12_I),
+    ("p12_j_seed292", _P12_J),
+    ("p12_k_seed983", _P12_K),
+    ("p12_a_seed0", _P12_A),
+    ("p12_b_seed1", _P12_B),
+    ("p12_c_seed2", _P12_C),
+    ("p12_d_seed3", _P12_D),
+    ("p12_e_seed4", _P12_E),
+    ("p12_f_seed5", _P12_F),
+    ("p12_g_seed6", _P12_G),
+    ("p12_h_seed7", _P12_H),
+]
+
 PATTERNS_BY_SIZE: dict[int, list[list[list[int]]]] = {
     12: PATTERNS_12,
+}
+
+CATALOG_BY_SIZE: dict[int, list[tuple[str, list[list[int]]]]] = {
+    12: PATTERN_CATALOG_12,
 }
 
 
 def get_patterns(size: int) -> list[list[list[int]]]:
     return PATTERNS_BY_SIZE.get(size, [])
+
+
+def get_pattern_catalog(size: int) -> list[tuple[str, list[list[int]]]]:
+    """Named patterns for a grid size: (pattern_id, 0/1 matrix)."""
+    return [entry for entry in CATALOG_BY_SIZE.get(size, [])]
 
 
 def random_pattern_grid(size: int, rng: random.Random | None = None) -> Grid | None:
@@ -189,3 +261,6 @@ def random_pattern_grid(size: int, rng: random.Random | None = None) -> Grid | N
 for _size, _plist in PATTERNS_BY_SIZE.items():
     for _p in _plist:
         _validate_stored_pattern(_p, _size)
+
+for _pid, _p in PATTERN_CATALOG_12:
+    _validate_stored_pattern(_p, 12)

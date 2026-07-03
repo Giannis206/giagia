@@ -12,7 +12,14 @@ from pathlib import Path
 from crossword.candidate_index import MAX_SLOT_ATTEMPTS, CandidateIndex
 from crossword.dictionary import dictionary_stats, load_dictionary
 from crossword.grid import BLACK, Grid, WHITE, generate_symmetric_pattern
-from crossword.patterns import get_patterns, pattern_to_grid
+from crossword.patterns import get_pattern_catalog, get_patterns, pattern_to_grid
+from crossword.slot_policy import (
+    PatternEvaluation,
+    evaluate_pattern,
+    get_slot_policy,
+    slot_length_histogram,
+    slot_selection_key,
+)
 from crossword.slots import Slot, extract_slots, slots_by_cell
 from crossword.validate import validate_solution
 from crossword.word_store import WordStore, get_word_store
@@ -73,6 +80,53 @@ def _pattern_is_acceptable(slot_lengths: list[int]) -> bool:
     if len(counts) < 3:
         return False
     return True
+
+
+def _evaluate_slots_for_size(
+    size: int,
+    slot_lengths: list[int],
+    *,
+    strict_long: bool = False,
+) -> PatternEvaluation:
+    policy = get_slot_policy(size)
+    if size == 12:
+        return evaluate_pattern(policy, slot_lengths, strict_long=strict_long)
+    hist = slot_length_histogram(slot_lengths)
+    if not slot_lengths:
+        return PatternEvaluation(False, "no_slots", 0.0, hist, 0)
+    max_len = max(slot_lengths)
+    if not _pattern_is_acceptable(slot_lengths):
+        return PatternEvaluation(False, "legacy_reject", 0.0, hist, max_len)
+    return PatternEvaluation(
+        True,
+        "ok",
+        _pattern_balance_score(slot_lengths),
+        hist,
+        max_len,
+    )
+
+
+def _log_12_pattern_attempt(
+    pattern_id: str,
+    ev: PatternEvaluation,
+    action: str,
+    *,
+    elapsed: float | None = None,
+    total_elapsed: float | None = None,
+) -> None:
+    parts = [
+        f"12x12 pattern={pattern_id}",
+        f"action={action}",
+        f"max_len={ev.max_slot_length}",
+        f"hist={ev.histogram}",
+        f"score={ev.score:.2f}",
+        f"reason={ev.reason}",
+    ]
+    if elapsed is not None:
+        parts.append(f"pattern_elapsed={elapsed:.1f}s")
+    if total_elapsed is not None:
+        parts.append(f"total_elapsed={total_elapsed:.1f}s")
+    logger.info(" ".join(parts))
 
 
 def _pattern_balance_score(slot_lengths: list[int]) -> float:
@@ -138,6 +192,7 @@ class CrosswordSolver:
         word_scores: dict[str, int] | None = None,
         rng: random.Random | None = None,
         deadline: float | None = None,
+        grid_size: int | None = None,
     ):
         self.grid = grid
         self.slots = slots
@@ -145,6 +200,8 @@ class CrosswordSolver:
         self.word_scores = word_scores or {}
         self.rng = rng or random.Random()
         self.deadline = deadline
+        self.grid_size = grid_size or grid.size
+        self.slot_policy = get_slot_policy(self.grid_size)
         self.index = CandidateIndex(dictionary, self.word_scores, self.rng)
         self.cell_slots = slots_by_cell(slots)
         self.slot_map = {slot.slot_id: slot for slot in slots}
@@ -213,6 +270,7 @@ class CrosswordSolver:
                 word_scores=self.word_scores,
                 rng=random.Random(self.rng.randint(0, 2**31 - 1)),
                 deadline=effective_deadline,
+                grid_size=self.grid_size,
             )
             state = trial.solve(max_nodes=max_nodes)
             if state is not None:
@@ -235,15 +293,16 @@ class CrosswordSolver:
         if not unassigned:
             return None
 
-        # MRV with degree tie-breaker (more intersections first).
+        # MRV with degree tie-breaker; 12x12 uses length-penalty heuristics.
         return min(
             unassigned,
-            key=lambda s: (
-                len(self._candidate_set(s, state)),
-                -sum(len(self._neighbor_ids[s.slot_id]) for _ in [0]),
-                -s.length,
-                s.slot_id,
-            ),
+            key=lambda s: slot_selection_key(
+                self.slot_policy,
+                domain_size=len(self._candidate_set(s, state)),
+                crossing_count=len(self._neighbor_ids[s.slot_id]),
+                slot_length=s.length,
+            )
+            + (s.slot_id,),
         )
 
     def _pattern_for_slot(
@@ -392,6 +451,7 @@ def _attempt_fill(
         word_scores=word_scores,
         rng=solver_rng,
         deadline=deadline,
+        grid_size=grid.size,
     )
     state = solver.solve_with_restarts(
         restarts=restarts,
@@ -415,6 +475,102 @@ def _attempt_fill(
 
     words = sorted({solver.slot_map[sid].read(solver.grid) for sid in state.assignments})
     return GenerationResult(grid=solver.grid, slots=slots, state=state, words=words)
+
+
+def _try_pattern_fill(
+    *,
+    size: int,
+    pattern_id: str,
+    grid: Grid,
+    dictionary: dict[int, set[str]],
+    word_scores: dict[str, int],
+    rng: random.Random,
+    diag: GenerationDiagnostics,
+    budget: GenerationBudget,
+    deadline: float,
+    t0: float,
+    store: WordStore | None,
+    diagnostic: bool,
+    strict_policy: bool = False,
+) -> GenerationResult | None:
+    slots = extract_slots(grid)
+    lengths = [slot.length for slot in slots]
+    ev = _evaluate_slots_for_size(size, lengths, strict_long=strict_policy)
+
+    if size == 12 and not ev.accepted:
+        _log_12_pattern_attempt(
+            pattern_id,
+            ev,
+            "rejected_policy",
+            total_elapsed=time.monotonic() - t0,
+        )
+        return None
+
+    if any(slot.length > max(dictionary) for slot in slots):
+        diag.skipped_missing_lengths += 1
+        if size == 12:
+            _log_12_pattern_attempt(
+                pattern_id,
+                ev,
+                "rejected_missing_lengths",
+                total_elapsed=time.monotonic() - t0,
+            )
+        return None
+
+    missing = sorted({slot.length for slot in slots if not dictionary.get(slot.length)})
+    if missing:
+        diag.skipped_missing_lengths += 1
+        if size == 12:
+            _log_12_pattern_attempt(
+                pattern_id,
+                ev,
+                "rejected_missing_lengths",
+                total_elapsed=time.monotonic() - t0,
+            )
+        return None
+
+    if time.monotonic() > deadline:
+        return None
+
+    diag.pattern_attempts += 1
+    diag.last_slot_lengths = lengths
+    pattern_t0 = time.monotonic()
+    pattern_deadline = min(deadline, pattern_t0 + budget.pattern_time_cap)
+    result = _attempt_fill(
+        grid,
+        slots,
+        dictionary,
+        word_scores,
+        rng,
+        diag,
+        restarts=budget.restarts,
+        max_nodes=budget.max_nodes,
+        deadline=pattern_deadline,
+    )
+    pattern_elapsed = time.monotonic() - pattern_t0
+
+    if size == 12:
+        _log_12_pattern_attempt(
+            pattern_id,
+            ev,
+            "fill_ok" if result is not None else "fill_failed",
+            elapsed=pattern_elapsed,
+            total_elapsed=time.monotonic() - t0,
+        )
+
+    if result is not None:
+        diag.elapsed_seconds = time.monotonic() - t0
+        if store is not None:
+            store.record_puzzle_words(result.words)
+        if diagnostic:
+            logger.info(
+                "Generation succeeded (%s): %d words in %.1fs",
+                pattern_id,
+                len(result.words),
+                diag.elapsed_seconds,
+            )
+        return result
+    return None
 
 
 def generate_crossword(
@@ -471,67 +627,93 @@ def generate_crossword(
     for entry in bank_patterns[:3]:
         if time.monotonic() > deadline:
             break
-        diag.pattern_attempts += 1
         grid = _grid_from_pattern_rows(size, entry["pattern"])
-        slots = extract_slots(grid)
-        diag.last_slot_lengths = [slot.length for slot in slots]
-        pattern_deadline = min(deadline, time.monotonic() + budget.pattern_time_cap)
-        result = _attempt_fill(
-            grid,
-            slots,
-            dictionary,
-            word_scores,
-            rng,
-            diag,
-            restarts=budget.restarts,
-            max_nodes=budget.max_nodes,
-            deadline=pattern_deadline,
+        pattern_id = entry.get("id", f"bank_{size}")
+        result = _try_pattern_fill(
+            size=size,
+            pattern_id=str(pattern_id),
+            grid=grid,
+            dictionary=dictionary,
+            word_scores=word_scores,
+            rng=rng,
+            diag=diag,
+            budget=budget,
+            deadline=deadline,
+            t0=t0,
+            store=store,
+            diagnostic=diagnostic,
+            strict_policy=(size == 12),
         )
         if result is not None:
-            diag.elapsed_seconds = time.monotonic() - t0
-            if store is not None:
-                store.record_puzzle_words(result.words)
-            if diagnostic:
-                logger.info(
-                    "Generation succeeded (bank pattern): %d words in %.1fs",
-                    len(result.words),
-                    diag.elapsed_seconds,
-                )
             return result
 
-    builtin_patterns = get_patterns(size)
-    if builtin_patterns:
-        builtin_order = builtin_patterns[:]
-        rng.shuffle(builtin_order)
-        for pattern in builtin_order:
+    catalog = get_pattern_catalog(size)
+    if catalog:
+        scored_catalog: list[tuple[float, str, list[list[int]]]] = []
+        for pattern_id, pattern in catalog:
+            grid = pattern_to_grid(pattern)
+            lengths = [s.length for s in extract_slots(grid)]
+            ev = _evaluate_slots_for_size(size, lengths, strict_long=(size == 12))
+            if size == 12 and not ev.accepted:
+                _log_12_pattern_attempt(
+                    pattern_id,
+                    ev,
+                    "rejected_policy_precheck",
+                    total_elapsed=time.monotonic() - t0,
+                )
+                continue
+            scored_catalog.append((ev.score, pattern_id, pattern))
+        scored_catalog.sort(key=lambda item: (-item[0], item[1]))
+        if size == 12:
+            rng.shuffle(scored_catalog[:3])
+            tail = scored_catalog[3:]
+            rng.shuffle(tail)
+            scored_catalog = scored_catalog[:3] + tail
+
+        for _, pattern_id, pattern in scored_catalog:
             if time.monotonic() > deadline:
                 break
-            diag.pattern_attempts += 1
             grid = pattern_to_grid(pattern)
-            slots = extract_slots(grid)
-            diag.last_slot_lengths = [slot.length for slot in slots]
-            pattern_deadline = min(deadline, time.monotonic() + budget.pattern_time_cap)
-            result = _attempt_fill(
-                grid,
-                slots,
-                dictionary,
-                word_scores,
-                rng,
-                diag,
-                restarts=budget.restarts,
-                max_nodes=budget.max_nodes,
-                deadline=pattern_deadline,
+            result = _try_pattern_fill(
+                size=size,
+                pattern_id=pattern_id,
+                grid=grid,
+                dictionary=dictionary,
+                word_scores=word_scores,
+                rng=rng,
+                diag=diag,
+                budget=budget,
+                deadline=deadline,
+                t0=t0,
+                store=store,
+                diagnostic=diagnostic,
+                strict_policy=(size == 12),
             )
             if result is not None:
-                diag.elapsed_seconds = time.monotonic() - t0
-                if store is not None:
-                    store.record_puzzle_words(result.words)
-                if diagnostic:
-                    logger.info(
-                        "Generation succeeded (builtin pattern): %d words in %.1fs",
-                        len(result.words),
-                        diag.elapsed_seconds,
-                    )
+                return result
+    elif get_patterns(size):
+        builtin_order = get_patterns(size)[:]
+        rng.shuffle(builtin_order)
+        for idx, pattern in enumerate(builtin_order):
+            if time.monotonic() > deadline:
+                break
+            grid = pattern_to_grid(pattern)
+            result = _try_pattern_fill(
+                size=size,
+                pattern_id=f"builtin_{size}_{idx}",
+                grid=grid,
+                dictionary=dictionary,
+                word_scores=word_scores,
+                rng=rng,
+                diag=diag,
+                budget=budget,
+                deadline=deadline,
+                t0=t0,
+                store=store,
+                diagnostic=diagnostic,
+                strict_policy=(size == 12),
+            )
+            if result is not None:
                 return result
 
     pattern_candidates: list[tuple[float, int, Grid, list[Slot]]] = []
@@ -547,14 +729,14 @@ def generate_crossword(
             continue
         slots = extract_slots(grid)
         lengths = [s.length for s in slots]
-        if any(l > max(dictionary) for l in lengths):
+        if any(length > max(dictionary) for length in lengths):
             continue
         if any(not dictionary.get(s.length) for s in slots):
             continue
-        if not _pattern_is_acceptable(lengths):
+        ev = _evaluate_slots_for_size(size, lengths, strict_long=(size == 12))
+        if not ev.accepted:
             continue
-        balance = _pattern_balance_score(lengths)
-        pattern_candidates.append((balance, pattern_seed, grid, slots))
+        pattern_candidates.append((ev.score, pattern_seed, grid, slots))
 
     pattern_candidates.sort(key=lambda item: (-item[0], item[1]))
     pattern_candidates = pattern_candidates[:max_pattern_attempts]
@@ -562,30 +744,22 @@ def generate_crossword(
     for _, pattern_seed, grid, slots in pattern_candidates:
         if time.monotonic() > deadline:
             break
-        diag.pattern_attempts += 1
-        diag.last_slot_lengths = [slot.length for slot in slots]
-        pattern_deadline = min(deadline, time.monotonic() + budget.pattern_time_cap)
-        result = _attempt_fill(
-            grid,
-            slots,
-            dictionary,
-            word_scores,
-            random.Random(pattern_seed + 17),
-            diag,
-            restarts=budget.restarts,
-            max_nodes=budget.max_nodes,
-            deadline=pattern_deadline,
+        result = _try_pattern_fill(
+            size=size,
+            pattern_id=f"random_seed{pattern_seed}",
+            grid=grid,
+            dictionary=dictionary,
+            word_scores=word_scores,
+            rng=random.Random(pattern_seed + 17),
+            diag=diag,
+            budget=budget,
+            deadline=deadline,
+            t0=t0,
+            store=store,
+            diagnostic=diagnostic,
+            strict_policy=(size == 12),
         )
         if result is not None:
-            diag.elapsed_seconds = time.monotonic() - t0
-            if store is not None:
-                store.record_puzzle_words(result.words)
-            if diagnostic:
-                logger.info(
-                    "Generation succeeded: %d words in %.1fs",
-                    len(result.words),
-                    diag.elapsed_seconds,
-                )
             return result
 
     diag.elapsed_seconds = time.monotonic() - t0
