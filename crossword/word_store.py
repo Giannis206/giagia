@@ -120,7 +120,8 @@ class WordStore:
         # Shuffled length buckets for anti-bias candidate access.
         import random
 
-        shuffle_rng = random.Random(42)
+        shuffle_rng = random.Random()
+        shuffle_rng.seed()
         self._shuffled_buckets: dict[int, list[str]] = {}
         for length, words in self._dictionary.items():
             lst = list(words)

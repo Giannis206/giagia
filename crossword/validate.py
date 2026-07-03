@@ -58,6 +58,40 @@ def validate_solution(
 
 
 MAX_STARTING_LETTER_RATIO = 0.40
+BIAS_DEBUG_RATIO = 0.35
+
+
+def starting_letter_stats(words: list[str]) -> dict[str, int]:
+    """Count how many words start with each Greek letter."""
+    return dict(Counter(w[0] for w in words if w))
+
+
+def starting_letter_bias_report(
+    words: list[str],
+    *,
+    max_ratio: float = MAX_STARTING_LETTER_RATIO,
+    debug_ratio: float = BIAS_DEBUG_RATIO,
+) -> dict:
+    """Summarize starting-letter distribution for debug / rejection."""
+    if not words:
+        return {
+            "biased": False,
+            "debug_flag": False,
+            "dominant_letter": "",
+            "dominant_ratio": 0.0,
+            "distribution": {},
+        }
+    counts = Counter(w[0] for w in words if w)
+    letter, count = counts.most_common(1)[0]
+    ratio = count / len(words)
+    dist = dict(sorted(counts.items()))
+    return {
+        "biased": ratio > max_ratio,
+        "debug_flag": ratio > debug_ratio,
+        "dominant_letter": letter,
+        "dominant_ratio": ratio,
+        "distribution": dist,
+    }
 
 
 def validate_starting_letter_distribution(

@@ -12,7 +12,14 @@ from pathlib import Path
 from crossword.candidate_index import MAX_SLOT_ATTEMPTS, CandidateIndex
 from crossword.dictionary import dictionary_stats, load_dictionary
 from crossword.grid import BLACK, Grid, WHITE, generate_symmetric_pattern
-from crossword.patterns import get_pattern_catalog, get_patterns, pattern_to_grid
+from crossword.patterns import (
+    PatternEntry,
+    get_pattern_catalog,
+    get_patterns,
+    pattern_to_grid,
+    select_12_pattern_order,
+)
+from crossword.validate import starting_letter_bias_report
 from crossword.slot_policy import (
     PatternEvaluation,
     evaluate_pattern,
@@ -108,20 +115,33 @@ def _evaluate_slots_for_size(
 
 def _log_12_pattern_attempt(
     pattern_id: str,
-    ev: PatternEvaluation,
-    action: str,
     *,
+    tier: str = "",
+    total_slots: int = 0,
+    max_len: int = 0,
+    success: bool | None = None,
+    action: str = "",
     elapsed: float | None = None,
     total_elapsed: float | None = None,
+    ev: PatternEvaluation | None = None,
 ) -> None:
+    if ev is not None:
+        max_len = ev.max_slot_length
+    outcome = action
+    if success is not None and not action:
+        outcome = "success" if success else "fail"
     parts = [
         f"12x12 pattern={pattern_id}",
-        f"action={action}",
-        f"max_len={ev.max_slot_length}",
-        f"hist={ev.histogram}",
-        f"score={ev.score:.2f}",
-        f"reason={ev.reason}",
+        f"tier={tier or 'n/a'}",
+        f"max_slot={max_len}",
+        f"slots={total_slots}",
+        f"result={outcome}",
     ]
+    if ev is not None:
+        parts.append(f"hist={ev.histogram}")
+        parts.append(f"score={ev.score:.2f}")
+        if ev.reason != "ok":
+            parts.append(f"reason={ev.reason}")
     if elapsed is not None:
         parts.append(f"pattern_elapsed={elapsed:.1f}s")
     if total_elapsed is not None:
@@ -338,6 +358,8 @@ class CrosswordSolver:
             slot.length,
             pattern,
             exclude=state.used_words,
+            start_letter_counts=Counter(w[0] for w in state.used_words),
+            assigned_word_count=len(state.used_words),
         )
 
     @staticmethod
@@ -469,6 +491,15 @@ def _attempt_fill(
         validate_solution(grid=solver.grid, slots=slots, dictionary=dictionary)
     except ValueError as exc:
         diag.validation_failures += 1
+        words = sorted({solver.slot_map[sid].read(solver.grid) for sid in (state.assignments if state else {})})
+        bias = starting_letter_bias_report(words)
+        if bias["biased"]:
+            logger.warning(
+                "Starting-letter bias detected: dominant=%s ratio=%.0f%% dist=%s",
+                bias["dominant_letter"],
+                bias["dominant_ratio"] * 100,
+                bias["distribution"],
+            )
         if diag.validation_failures <= 3:
             logger.warning("Validation failed: %s", exc)
         return None
@@ -492,17 +523,25 @@ def _try_pattern_fill(
     store: WordStore | None,
     diagnostic: bool,
     strict_policy: bool = False,
+    pattern_entry: PatternEntry | None = None,
 ) -> GenerationResult | None:
     slots = extract_slots(grid)
     lengths = [slot.length for slot in slots]
     ev = _evaluate_slots_for_size(size, lengths, strict_long=strict_policy)
+    tier = pattern_entry.tier if pattern_entry else ""
+    total_slots = pattern_entry.total_slot_count if pattern_entry else len(slots)
+    max_len = pattern_entry.max_slot_length if pattern_entry else ev.max_slot_length
 
     if size == 12 and not ev.accepted:
         _log_12_pattern_attempt(
             pattern_id,
-            ev,
-            "rejected_policy",
+            tier=tier,
+            total_slots=total_slots,
+            max_len=max_len,
+            success=False,
+            action="rejected_policy",
             total_elapsed=time.monotonic() - t0,
+            ev=ev,
         )
         return None
 
@@ -511,9 +550,13 @@ def _try_pattern_fill(
         if size == 12:
             _log_12_pattern_attempt(
                 pattern_id,
-                ev,
-                "rejected_missing_lengths",
+                tier=tier,
+                total_slots=total_slots,
+                max_len=max_len,
+                success=False,
+                action="rejected_missing_lengths",
                 total_elapsed=time.monotonic() - t0,
+                ev=ev,
             )
         return None
 
@@ -523,9 +566,13 @@ def _try_pattern_fill(
         if size == 12:
             _log_12_pattern_attempt(
                 pattern_id,
-                ev,
-                "rejected_missing_lengths",
+                tier=tier,
+                total_slots=total_slots,
+                max_len=max_len,
+                success=False,
+                action="rejected_missing_lengths",
                 total_elapsed=time.monotonic() - t0,
+                ev=ev,
             )
         return None
 
@@ -552,10 +599,14 @@ def _try_pattern_fill(
     if size == 12:
         _log_12_pattern_attempt(
             pattern_id,
-            ev,
-            "fill_ok" if result is not None else "fill_failed",
+            tier=tier,
+            total_slots=total_slots,
+            max_len=max_len,
+            success=result is not None,
+            action="fill_ok" if result is not None else "fill_failed",
             elapsed=pattern_elapsed,
             total_elapsed=time.monotonic() - t0,
+            ev=ev,
         )
 
     if result is not None:
@@ -568,6 +619,13 @@ def _try_pattern_fill(
                 pattern_id,
                 len(result.words),
                 diag.elapsed_seconds,
+            )
+            bias = starting_letter_bias_report(result.words)
+            logger.info(
+                "Starting letters: dominant=%s %.0f%% dist_sample=%s",
+                bias["dominant_letter"],
+                bias["dominant_ratio"] * 100,
+                dict(list(bias["distribution"].items())[:8]),
             )
         return result
     return None
@@ -647,20 +705,51 @@ def generate_crossword(
         if result is not None:
             return result
 
-    catalog = get_pattern_catalog(size)
-    if catalog:
+    if size == 12:
+        pattern_order = select_12_pattern_order(rng)
+        for entry in pattern_order:
+            if time.monotonic() > deadline:
+                break
+            grid = pattern_to_grid(entry.grid)
+            lengths = [s.length for s in extract_slots(grid)]
+            ev = _evaluate_slots_for_size(size, lengths, strict_long=True)
+            if not ev.accepted:
+                _log_12_pattern_attempt(
+                    entry.id,
+                    tier=entry.tier,
+                    total_slots=entry.total_slot_count,
+                    max_len=entry.max_slot_length,
+                    success=False,
+                    action="rejected_policy_precheck",
+                    total_elapsed=time.monotonic() - t0,
+                    ev=ev,
+                )
+                continue
+            result = _try_pattern_fill(
+                size=size,
+                pattern_id=entry.id,
+                grid=grid,
+                dictionary=dictionary,
+                word_scores=word_scores,
+                rng=rng,
+                diag=diag,
+                budget=budget,
+                deadline=deadline,
+                t0=t0,
+                store=store,
+                diagnostic=diagnostic,
+                strict_policy=True,
+                pattern_entry=entry,
+            )
+            if result is not None:
+                return result
+    elif (catalog := get_pattern_catalog(size)):
         scored_catalog: list[tuple[float, str, list[list[int]]]] = []
         for pattern_id, pattern in catalog:
             grid = pattern_to_grid(pattern)
             lengths = [s.length for s in extract_slots(grid)]
             ev = _evaluate_slots_for_size(size, lengths, strict_long=(size == 12))
-            if size == 12 and not ev.accepted:
-                _log_12_pattern_attempt(
-                    pattern_id,
-                    ev,
-                    "rejected_policy_precheck",
-                    total_elapsed=time.monotonic() - t0,
-                )
+            if not ev.accepted:
                 continue
             scored_catalog.append((ev.score, pattern_id, pattern))
         scored_catalog.sort(key=lambda item: (-item[0], item[1]))

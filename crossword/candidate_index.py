@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 MAX_SLOT_ATTEMPTS = 150
 
@@ -40,10 +40,26 @@ def weighted_sample_candidates(
     rng: random.Random,
     *,
     limit: int,
+    start_letter_counts: Counter | None = None,
+    assigned_word_count: int = 0,
 ) -> list[str]:
     """Weighted random sampling without replacement from a candidate set."""
     if not candidates:
         return []
+
+    def _weight(word: str) -> float:
+        base = float(max(1, scores.get(word, 1)))
+        if start_letter_counts and assigned_word_count > 0 and word:
+            letter = word[0]
+            ratio = start_letter_counts.get(letter, 0) / assigned_word_count
+            if ratio >= 0.40:
+                base *= 0.25
+            elif ratio >= 0.30:
+                base *= 0.5
+            elif ratio >= 0.22:
+                base *= 0.75
+        return base
+
     pool = list(candidates)
     if len(pool) <= limit:
         rng.shuffle(pool)
@@ -52,7 +68,7 @@ def weighted_sample_candidates(
     chosen: list[str] = []
     remaining = pool[:]
     for _ in range(limit):
-        weights = [max(1, scores.get(w, 1)) for w in remaining]
+        weights = [_weight(word) for word in remaining]
         total = sum(weights)
         pick = rng.uniform(0, total)
         acc = 0.0
@@ -126,14 +142,19 @@ class CandidateIndex:
         *,
         exclude: set[str] | None = None,
         limit: int = 350,
+        start_letter_counts: Counter | None = None,
+        assigned_word_count: int = 0,
     ) -> list[str]:
         candidates = self.candidate_set(length, pattern, exclude=exclude)
         if not candidates:
             return []
         has_constraints = any(pattern)
-        if has_constraints:
-            return weighted_sample_candidates(
-                candidates, self.scores, self.rng, limit=min(limit, len(candidates))
-            )
         cap = min(limit, len(candidates))
-        return weighted_sample_candidates(candidates, self.scores, self.rng, limit=cap)
+        return weighted_sample_candidates(
+            candidates,
+            self.scores,
+            self.rng,
+            limit=cap if has_constraints else cap,
+            start_letter_counts=start_letter_counts,
+            assigned_word_count=assigned_word_count,
+        )
