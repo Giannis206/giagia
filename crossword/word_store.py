@@ -117,6 +117,15 @@ class WordStore:
         self._dictionary = dict(dictionary)
         self._scores = scores
         self._recent_penalties = recent
+        # Shuffled length buckets for anti-bias candidate access.
+        import random
+
+        shuffle_rng = random.Random(42)
+        self._shuffled_buckets: dict[int, list[str]] = {}
+        for length, words in self._dictionary.items():
+            lst = list(words)
+            shuffle_rng.shuffle(lst)
+            self._shuffled_buckets[length] = lst
         self._position_index = self._build_position_index(self._dictionary)
         self._loaded = True
 

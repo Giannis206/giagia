@@ -9,8 +9,10 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from crossword.candidate_index import MAX_SLOT_ATTEMPTS, CandidateIndex
 from crossword.dictionary import dictionary_stats, load_dictionary
 from crossword.grid import BLACK, Grid, WHITE, generate_symmetric_pattern
+from crossword.patterns import get_patterns, pattern_to_grid
 from crossword.slots import Slot, extract_slots, slots_by_cell
 from crossword.validate import validate_solution
 from crossword.word_store import WordStore, get_word_store
@@ -55,7 +57,7 @@ def _budget_for_size(size: int) -> GenerationBudget:
     if size <= 10:
         return GenerationBudget(90.0, 12, 4, 12_000, 25.0)
     if size <= 12:
-        return GenerationBudget(150.0, 14, 4, 12_000, 40.0)
+        return GenerationBudget(64.0, 16, 4, 12_000, 8.0)
     return GenerationBudget(90.0, 6, 2, 8_000, 40.0)
 
 
@@ -126,22 +128,6 @@ class GenerationDiagnostics:
         return "; ".join(lines)
 
 
-def _build_position_index(
-    dictionary: dict[int, set[str]],
-) -> dict[int, list[dict[str, set[str]]]]:
-    index: dict[int, list[dict[str, set[str]]]] = {}
-    for length, words in dictionary.items():
-        buckets = [defaultdict(set) for _ in range(length)]
-        for word in words:
-            for pos, letter in enumerate(word):
-                buckets[pos][letter].add(word)
-        index[length] = buckets
-    return index
-
-
-MAX_CANDIDATES_PER_SLOT = 350
-
-
 class CrosswordSolver:
     def __init__(
         self,
@@ -159,9 +145,9 @@ class CrosswordSolver:
         self.word_scores = word_scores or {}
         self.rng = rng or random.Random()
         self.deadline = deadline
+        self.index = CandidateIndex(dictionary, self.word_scores, self.rng)
         self.cell_slots = slots_by_cell(slots)
         self.slot_map = {slot.slot_id: slot for slot in slots}
-        self.position_index = _build_position_index(dictionary)
         self._neighbor_ids: dict[int, set[int]] = defaultdict(set)
         for slot in slots:
             neighbors: set[int] = set()
@@ -188,9 +174,10 @@ class CrosswordSolver:
                 return True
 
             candidates = self._candidates(next_slot, state)
-            self._shuffle_scored(candidates)
 
-            for word in candidates:
+            for attempt_idx, word in enumerate(candidates):
+                if attempt_idx >= MAX_SLOT_ATTEMPTS:
+                    break
                 if word not in self.dictionary.get(next_slot.length, set()):
                     continue
                 if not self._can_place(next_slot, word, state):
@@ -224,7 +211,7 @@ class CrosswordSolver:
                 self.slots,
                 self.dictionary,
                 word_scores=self.word_scores,
-                rng=self.rng,
+                rng=random.Random(self.rng.randint(0, 2**31 - 1)),
                 deadline=effective_deadline,
             )
             state = trial.solve(max_nodes=max_nodes)
@@ -242,16 +229,6 @@ class CrosswordSolver:
             if not self._candidate_set(slot, state):
                 empty.append((slot.slot_id, slot.length, slot.direction))
         return empty
-
-    def _shuffle_scored(self, candidates: list[str]) -> None:
-        self.rng.shuffle(candidates)
-        candidates.sort(
-            key=lambda w: (
-                self.word_scores.get(w, 0),
-                sum(ch in "ΑΕΗΙΟΥΩ" for ch in w),
-            ),
-            reverse=True,
-        )
 
     def _select_slot(self, state: SolverState) -> Slot | None:
         unassigned = [s for s in self.slots if s.slot_id not in state.assignments]
@@ -282,53 +259,27 @@ class CrosswordSolver:
         state: SolverState,
         letters: dict[tuple[int, int], str] | None = None,
     ) -> set[str]:
-        letters = state.letters if letters is None else letters
-        pattern = self._pattern_for_slot(slot, letters)
-        dict_words = self.dictionary.get(slot.length)
-        if not dict_words:
-            return set()
-
-        candidates: set[str] | None = None
-
-        for pos, letter in enumerate(pattern):
-            if letter is None:
-                continue
-            pos_words = self.position_index[slot.length][pos].get(letter, set())
-            candidates = pos_words if candidates is None else candidates & pos_words
-
-        if candidates is None:
-            candidates = set(dict_words)
-        else:
-            candidates = set(candidates)
-
-        candidates &= dict_words
-        candidates -= state.used_words
-
-        if any(pattern):
-            return {w for w in candidates if self._word_matches(w, pattern)}
-        return candidates
+        resolved = state.letters if letters is None else letters
+        pattern = self._pattern_for_slot(slot, resolved)
+        return self.index.candidate_set(
+            slot.length,
+            pattern,
+            exclude=state.used_words,
+        )
 
     def _candidates(
         self,
         slot: Slot,
         state: SolverState,
         letters: dict[tuple[int, int], str] | None = None,
-        *,
-        limit: int | None = MAX_CANDIDATES_PER_SLOT,
     ) -> list[str]:
-        resolved_letters = state.letters if letters is None else letters
-        candidates = list(self._candidate_set(slot, state, letters))
-        if not candidates:
-            return []
-        has_constraints = any(self._pattern_for_slot(slot, resolved_letters))
-        self._shuffle_scored(candidates)
-        if (
-            limit is not None
-            and not has_constraints
-            and len(candidates) > limit
-        ):
-            return candidates[:limit]
-        return candidates
+        resolved = state.letters if letters is None else letters
+        pattern = self._pattern_for_slot(slot, resolved)
+        return self.index.sample_candidates(
+            slot.length,
+            pattern,
+            exclude=state.used_words,
+        )
 
     @staticmethod
     def _word_matches(word: str, pattern: list[str | None]) -> bool:
@@ -547,6 +498,41 @@ def generate_crossword(
                     diag.elapsed_seconds,
                 )
             return result
+
+    builtin_patterns = get_patterns(size)
+    if builtin_patterns:
+        builtin_order = builtin_patterns[:]
+        rng.shuffle(builtin_order)
+        for pattern in builtin_order:
+            if time.monotonic() > deadline:
+                break
+            diag.pattern_attempts += 1
+            grid = pattern_to_grid(pattern)
+            slots = extract_slots(grid)
+            diag.last_slot_lengths = [slot.length for slot in slots]
+            pattern_deadline = min(deadline, time.monotonic() + budget.pattern_time_cap)
+            result = _attempt_fill(
+                grid,
+                slots,
+                dictionary,
+                word_scores,
+                rng,
+                diag,
+                restarts=budget.restarts,
+                max_nodes=budget.max_nodes,
+                deadline=pattern_deadline,
+            )
+            if result is not None:
+                diag.elapsed_seconds = time.monotonic() - t0
+                if store is not None:
+                    store.record_puzzle_words(result.words)
+                if diagnostic:
+                    logger.info(
+                        "Generation succeeded (builtin pattern): %d words in %.1fs",
+                        len(result.words),
+                        diag.elapsed_seconds,
+                    )
+                return result
 
     pattern_candidates: list[tuple[float, int, Grid, list[Slot]]] = []
     for _ in range(max_pattern_attempts * 2):

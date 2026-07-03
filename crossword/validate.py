@@ -54,6 +54,30 @@ def validate_solution(
         if duplicates:
             raise ValueError(f"Duplicate words used: {', '.join(sorted(duplicates))}")
 
+    validate_starting_letter_distribution(used_words)
+
+
+MAX_STARTING_LETTER_RATIO = 0.40
+
+
+def validate_starting_letter_distribution(
+    words: list[str],
+    *,
+    max_ratio: float = MAX_STARTING_LETTER_RATIO,
+) -> None:
+    """Reject puzzles where one starting letter dominates (>40% by default)."""
+    if not words:
+        return
+    counts = Counter(w[0] for w in words if w)
+    if not counts:
+        return
+    letter, count = counts.most_common(1)[0]
+    ratio = count / len(words)
+    if ratio > max_ratio:
+        raise ValueError(
+            f"Starting letter bias: '{letter}' starts {count}/{len(words)} words ({ratio:.0%})"
+        )
+
 
 def _validate_slot_lengths(slots: list[Slot]) -> None:
     for slot in slots:
