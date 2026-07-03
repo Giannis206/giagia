@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from crossword.pattern_stats import PatternStatsTracker
 
 from crossword.grid import BLACK, Grid, WHITE
 from crossword.slots import extract_slots
@@ -305,8 +308,11 @@ def _entry(
     )
 
 
-def pattern_selection_weight(entry: PatternEntry) -> float:
-    """Higher weight for lower max slot length and richer slot counts."""
+def pattern_selection_weight(
+    entry: PatternEntry,
+    tracker: PatternStatsTracker | None = None,
+) -> float:
+    """Higher weight for lower max slot length, richer slot counts, and runtime success."""
     weight = 1.0
     weight += (13 - entry.max_slot_length) * 3.0
     weight += min(entry.total_slot_count, 60) * 0.08
@@ -314,18 +320,21 @@ def pattern_selection_weight(entry: PatternEntry) -> float:
         weight -= 3.0
     if entry.tier == "primary":
         weight += 1.5
-    return max(0.5, weight)
+    if tracker is not None:
+        weight *= tracker.runtime_weight(entry.id)
+    return max(0.2, weight)
 
 
 def weighted_pattern_order(
     entries: list[PatternEntry],
     rng: random.Random,
+    tracker: PatternStatsTracker | None = None,
 ) -> list[PatternEntry]:
     """Weighted random permutation without replacement."""
     remaining = entries[:]
     order: list[PatternEntry] = []
     while remaining:
-        weights = [pattern_selection_weight(entry) for entry in remaining]
+        weights = [pattern_selection_weight(entry, tracker) for entry in remaining]
         total = sum(weights)
         pick = rng.uniform(0, total)
         acc = 0.0
@@ -395,6 +404,7 @@ def select_12_pattern_order(
     rng: random.Random,
     *,
     include_legacy: bool = False,
+    tracker: PatternStatsTracker | None = None,
 ) -> list[PatternEntry]:
     """Primary tier first (weighted), then fallback tier (weighted)."""
     primary = get_pattern_entries(12, tier="primary")
@@ -408,7 +418,10 @@ def select_12_pattern_order(
         fallback = [e for e in get_pattern_entries(12, tier="fallback")]
     else:
         fallback = [e for e in get_pattern_entries(12, tier="fallback") if e.id in fallback_ids]
-    return weighted_pattern_order(primary, rng) + weighted_pattern_order(fallback, rng)
+    return (
+        weighted_pattern_order(primary, rng, tracker)
+        + weighted_pattern_order(fallback, rng, tracker)
+    )
 
 
 def random_pattern_grid(size: int, rng: random.Random | None = None) -> Grid | None:

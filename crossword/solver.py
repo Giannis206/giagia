@@ -12,6 +12,7 @@ from pathlib import Path
 from crossword.candidate_index import MAX_SLOT_ATTEMPTS, CandidateIndex
 from crossword.dictionary import dictionary_stats, load_dictionary
 from crossword.grid import BLACK, Grid, WHITE, generate_symmetric_pattern
+from crossword.pattern_stats import get_pattern_stats_tracker
 from crossword.patterns import (
     PatternEntry,
     get_pattern_catalog,
@@ -222,6 +223,7 @@ class CrosswordSolver:
         self.deadline = deadline
         self.grid_size = grid_size or grid.size
         self.slot_policy = get_slot_policy(self.grid_size)
+        self._early_abandon = self.grid_size == 12
         self.index = CandidateIndex(dictionary, self.word_scores, self.rng)
         self.cell_slots = slots_by_cell(slots)
         self.slot_map = {slot.slot_id: slot for slot in slots}
@@ -245,12 +247,20 @@ class CrosswordSolver:
             nodes += 1
             if nodes > max_nodes:
                 return False
+            if self._early_abandon and nodes % 400 == 0 and self._preflight_bad_state(state):
+                return False
 
             next_slot = self._select_slot(state)
             if next_slot is None:
                 return True
 
+            domain_size = len(self._candidate_set(next_slot, state))
+            if self._early_abandon and domain_size == 0:
+                return False
+
             candidates = self._candidates(next_slot, state)
+            if not candidates:
+                return False
 
             for attempt_idx, word in enumerate(candidates):
                 if attempt_idx >= MAX_SLOT_ATTEMPTS:
@@ -280,9 +290,11 @@ class CrosswordSolver:
         deadline: float | None = None,
     ) -> SolverState | None:
         effective_deadline = deadline if deadline is not None else self.deadline
+        fast_fails = 0
         for _ in range(restarts):
             if effective_deadline is not None and time.monotonic() > effective_deadline:
                 break
+            restart_t0 = time.monotonic()
             trial = CrosswordSolver(
                 self.grid.copy(),
                 self.slots,
@@ -296,7 +308,44 @@ class CrosswordSolver:
             if state is not None:
                 self.grid = trial.grid
                 return state
+            if self._early_abandon:
+                restart_elapsed = time.monotonic() - restart_t0
+                if restart_elapsed < 0.35:
+                    fast_fails += 1
+                    if fast_fails >= 3:
+                        break
+                elif restart_elapsed > 2.0:
+                    fast_fails = 0
         return None
+
+    def _preflight_bad_state(self, state: SolverState) -> bool:
+        if not self._early_abandon:
+            return False
+        assigned = len(state.assignments)
+        if assigned < 6:
+            return False
+
+        domains: list[int] = []
+        for slot in self.slots:
+            if slot.slot_id in state.assignments:
+                continue
+            domains.append(len(self._candidate_set(slot, state)))
+        if not domains:
+            return False
+        domains.sort()
+        if domains[0] == 0:
+            return True
+
+        starts = Counter(w[0] for w in state.used_words)
+        if assigned >= 10:
+            _, top = starts.most_common(1)[0]
+            if top / assigned >= 0.55:
+                return True
+        return False
+
+    def _tight_slot_abandon(self, state: SolverState, domain_size: int) -> bool:
+        _ = state, domain_size
+        return False
 
     def count_zero_candidate_slots(self, state: SolverState | None = None) -> list[tuple[int, int, str]]:
         state = state or SolverState()
@@ -354,13 +403,41 @@ class CrosswordSolver:
     ) -> list[str]:
         resolved = state.letters if letters is None else letters
         pattern = self._pattern_for_slot(slot, resolved)
+        candidate_set = self._candidate_set(slot, state, letters)
+        future_space: dict[str, int] | None = None
+        if self._early_abandon and candidate_set and len(candidate_set) <= 80:
+            future_space = {
+                word: self._min_neighbor_domain(slot, word, state)
+                for word in candidate_set
+            }
         return self.index.sample_candidates(
             slot.length,
             pattern,
             exclude=state.used_words,
             start_letter_counts=Counter(w[0] for w in state.used_words),
             assigned_word_count=len(state.used_words),
+            future_space=future_space,
         )
+
+    def _min_neighbor_domain(
+        self,
+        slot: Slot,
+        word: str,
+        state: SolverState,
+    ) -> int:
+        tentative = dict(state.letters)
+        for cell, letter in zip(slot.cells, word):
+            tentative[cell] = letter
+        min_domain = 10_000
+        found = False
+        for neighbor_id in self._neighbor_ids[slot.slot_id]:
+            if neighbor_id in state.assignments:
+                continue
+            other = self.slot_map[neighbor_id]
+            size = len(self._candidate_set(other, state, tentative))
+            min_domain = min(min_domain, size)
+            found = True
+        return min_domain if found else 500
 
     @staticmethod
     def _word_matches(word: str, pattern: list[str | None]) -> bool:
@@ -524,6 +601,7 @@ def _try_pattern_fill(
     diagnostic: bool,
     strict_policy: bool = False,
     pattern_entry: PatternEntry | None = None,
+    pattern_time_cap: float | None = None,
 ) -> GenerationResult | None:
     slots = extract_slots(grid)
     lengths = [slot.length for slot in slots]
@@ -582,7 +660,8 @@ def _try_pattern_fill(
     diag.pattern_attempts += 1
     diag.last_slot_lengths = lengths
     pattern_t0 = time.monotonic()
-    pattern_deadline = min(deadline, pattern_t0 + budget.pattern_time_cap)
+    cap = pattern_time_cap if pattern_time_cap is not None else budget.pattern_time_cap
+    pattern_deadline = min(deadline, pattern_t0 + cap)
     result = _attempt_fill(
         grid,
         slots,
@@ -607,6 +686,11 @@ def _try_pattern_fill(
             elapsed=pattern_elapsed,
             total_elapsed=time.monotonic() - t0,
             ev=ev,
+        )
+        get_pattern_stats_tracker().record(
+            pattern_id,
+            success=result is not None,
+            fill_seconds=pattern_elapsed,
         )
 
     if result is not None:
@@ -706,7 +790,9 @@ def generate_crossword(
             return result
 
     if size == 12:
-        pattern_order = select_12_pattern_order(rng)
+        pattern_tracker = get_pattern_stats_tracker()
+        pattern_order = select_12_pattern_order(rng, tracker=pattern_tracker)
+        pattern_fail_streak = 0
         for entry in pattern_order:
             if time.monotonic() > deadline:
                 break
@@ -725,6 +811,11 @@ def generate_crossword(
                     ev=ev,
                 )
                 continue
+            dyn_cap = budget.pattern_time_cap
+            if pattern_fail_streak >= 2:
+                dyn_cap = min(dyn_cap, 5.0)
+            if pattern_fail_streak >= 4:
+                dyn_cap = min(dyn_cap, 3.5)
             result = _try_pattern_fill(
                 size=size,
                 pattern_id=entry.id,
@@ -740,9 +831,11 @@ def generate_crossword(
                 diagnostic=diagnostic,
                 strict_policy=True,
                 pattern_entry=entry,
+                pattern_time_cap=dyn_cap,
             )
             if result is not None:
                 return result
+            pattern_fail_streak += 1
     elif (catalog := get_pattern_catalog(size)):
         scored_catalog: list[tuple[float, str, list[list[int]]]] = []
         for pattern_id, pattern in catalog:

@@ -42,6 +42,7 @@ def weighted_sample_candidates(
     limit: int,
     start_letter_counts: Counter | None = None,
     assigned_word_count: int = 0,
+    future_space: dict[str, int] | None = None,
 ) -> list[str]:
     """Weighted random sampling without replacement from a candidate set."""
     if not candidates:
@@ -49,24 +50,38 @@ def weighted_sample_candidates(
 
     def _weight(word: str) -> float:
         base = float(max(1, scores.get(word, 1)))
-        if start_letter_counts and assigned_word_count > 0 and word:
+        if start_letter_counts is not None and assigned_word_count > 0 and word:
             letter = word[0]
             ratio = start_letter_counts.get(letter, 0) / assigned_word_count
             if ratio >= 0.40:
-                base *= 0.25
+                base *= 0.2
             elif ratio >= 0.30:
-                base *= 0.5
+                base *= 0.45
             elif ratio >= 0.22:
+                base *= 0.7
+            elif start_letter_counts.get(letter, 0) == 0:
+                base *= 1.25
+        if future_space is not None:
+            space = future_space.get(word, 0)
+            if space <= 2:
+                base *= 0.35
+            elif space <= 8:
                 base *= 0.75
+            elif space >= 40:
+                base *= 1.2
+            elif space >= 20:
+                base *= 1.08
         return base
 
     pool = list(candidates)
-    if len(pool) <= limit:
-        rng.shuffle(pool)
-        return pool
+    ranked = sorted(pool, key=lambda w: -_weight(w))
+    top = ranked[: min(len(ranked), limit * 2)]
+    if len(top) <= limit:
+        rng.shuffle(top)
+        return top
 
     chosen: list[str] = []
-    remaining = pool[:]
+    remaining = top[:]
     for _ in range(limit):
         weights = [_weight(word) for word in remaining]
         total = sum(weights)
@@ -144,17 +159,18 @@ class CandidateIndex:
         limit: int = 350,
         start_letter_counts: Counter | None = None,
         assigned_word_count: int = 0,
+        future_space: dict[str, int] | None = None,
     ) -> list[str]:
         candidates = self.candidate_set(length, pattern, exclude=exclude)
         if not candidates:
             return []
-        has_constraints = any(pattern)
         cap = min(limit, len(candidates))
         return weighted_sample_candidates(
             candidates,
             self.scores,
             self.rng,
-            limit=cap if has_constraints else cap,
+            limit=cap,
             start_letter_counts=start_letter_counts,
             assigned_word_count=assigned_word_count,
+            future_space=future_space,
         )
