@@ -13,19 +13,20 @@ from crossword.candidate_index import MAX_SLOT_ATTEMPTS, CandidateIndex
 from crossword.dictionary import dictionary_stats, load_dictionary
 from crossword.grid import BLACK, Grid, WHITE, generate_symmetric_pattern
 from crossword.pattern_stats import get_pattern_stats_tracker
+from crossword.pattern_scoring import evaluate_pattern_layout
 from crossword.patterns import (
+    CATALOG_SIZES,
+    MAX_CATALOG_PATTERNS,
+    CATALOG_TIME_FRACTION,
     PatternEntry,
     get_pattern_catalog,
     get_patterns,
     pattern_to_grid,
-    select_7_pattern_order,
-    select_12_pattern_order,
+    select_pattern_order,
 )
-from crossword.pattern7 import evaluate_pattern_7
 from crossword.validate import starting_letter_bias_report
 from crossword.slot_policy import (
     PatternEvaluation,
-    evaluate_pattern,
     get_slot_policy,
     slot_length_histogram,
     slot_selection_key,
@@ -72,7 +73,7 @@ def _budget_for_size(size: int) -> GenerationBudget:
     if size <= 8:
         return GenerationBudget(50.0, 15, 5, 15_000, 18.0)
     if size <= 10:
-        return GenerationBudget(90.0, 12, 4, 12_000, 25.0)
+        return GenerationBudget(90.0, 18, 4, 12_000, 14.0)
     if size <= 12:
         return GenerationBudget(64.0, 16, 4, 12_000, 8.0)
     return GenerationBudget(90.0, 6, 2, 8_000, 40.0)
@@ -99,15 +100,14 @@ def _evaluate_slots_for_size(
     strict_long: bool = False,
     black_square_count: int = 0,
 ) -> PatternEvaluation:
-    if size == 7:
-        return evaluate_pattern_7(
+    if size in CATALOG_SIZES:
+        return evaluate_pattern_layout(
             slot_lengths,
+            grid_size=size,
             black_square_count=black_square_count,
             strict=strict_long,
+            use_slot_policy=(size == 12),
         )
-    policy = get_slot_policy(size)
-    if size == 12:
-        return evaluate_pattern(policy, slot_lengths, strict_long=strict_long)
     hist = slot_length_histogram(slot_lengths)
     if not slot_lengths:
         return PatternEvaluation(False, "no_slots", 0.0, hist, 0)
@@ -533,6 +533,7 @@ class GenerationResult:
     slots: list[Slot]
     state: SolverState
     words: list[str]
+    pattern_id: str = ""
 
 
 def _grid_from_pattern_rows(size: int, rows: list[str]) -> Grid:
@@ -675,6 +676,9 @@ def _try_pattern_fill(
         )
         return None
 
+    if size in CATALOG_SIZES and not ev.accepted:
+        return None
+
     if any(slot.length > max(dictionary) for slot in slots):
         diag.skipped_missing_lengths += 1
         if size == 12:
@@ -709,6 +713,7 @@ def _try_pattern_fill(
     if time.monotonic() > deadline:
         return None
 
+    get_pattern_stats_tracker().record_selection(pattern_id)
     diag.pattern_attempts += 1
     diag.last_slot_lengths = lengths
     pattern_t0 = time.monotonic()
@@ -739,13 +744,7 @@ def _try_pattern_fill(
             total_elapsed=time.monotonic() - t0,
             ev=ev,
         )
-        get_pattern_stats_tracker().record(
-            pattern_id,
-            success=result is not None,
-            fill_seconds=pattern_elapsed,
-        )
-
-    if size == 7:
+    elif size == 7:
         layout_score = pattern_entry.layout_score if pattern_entry else ev.score
         _log_7_pattern_attempt(
             pattern_id,
@@ -757,6 +756,8 @@ def _try_pattern_fill(
             elapsed=pattern_elapsed,
             total_elapsed=time.monotonic() - t0,
         )
+
+    if size in CATALOG_SIZES:
         get_pattern_stats_tracker().record(
             pattern_id,
             success=result is not None,
@@ -764,6 +765,7 @@ def _try_pattern_fill(
         )
 
     if result is not None:
+        result.pattern_id = pattern_id
         diag.elapsed_seconds = time.monotonic() - t0
         if store is not None:
             store.record_puzzle_words(result.words)
@@ -859,35 +861,61 @@ def generate_crossword(
         if result is not None:
             return result
 
-    if size == 7:
+    if size in CATALOG_SIZES:
         pattern_tracker = get_pattern_stats_tracker()
-        pattern_order = select_7_pattern_order(rng, tracker=pattern_tracker)
+        pattern_order = select_pattern_order(size, rng, tracker=pattern_tracker)
+        catalog_deadline = t0 + budget.total_seconds * CATALOG_TIME_FRACTION.get(size, 0.85)
+        max_catalog = MAX_CATALOG_PATTERNS.get(size, len(pattern_order))
         pattern_fail_streak = 0
-        for entry in pattern_order:
-            if time.monotonic() > deadline:
+        for entry in pattern_order[:max_catalog]:
+            if time.monotonic() > min(deadline, catalog_deadline):
                 break
             grid = pattern_to_grid(entry.grid)
             lengths = [s.length for s in extract_slots(grid)]
             ev = _evaluate_slots_for_size(
                 size,
                 lengths,
-                strict_long=True,
+                strict_long=(size in (7, 12)),
                 black_square_count=entry.black_square_count,
             )
             if not ev.accepted:
-                _log_7_pattern_attempt(
-                    entry.id,
-                    tier=entry.tier,
-                    histogram=ev.histogram,
-                    layout_score=ev.score,
-                    success=False,
-                    action="rejected_policy_precheck",
-                    total_elapsed=time.monotonic() - t0,
-                )
+                if size == 7:
+                    _log_7_pattern_attempt(
+                        entry.id,
+                        tier=entry.tier,
+                        histogram=ev.histogram,
+                        layout_score=ev.score,
+                        success=False,
+                        action="rejected_policy_precheck",
+                        total_elapsed=time.monotonic() - t0,
+                    )
+                elif size == 12:
+                    _log_12_pattern_attempt(
+                        entry.id,
+                        tier=entry.tier,
+                        total_slots=entry.total_slot_count,
+                        max_len=entry.max_slot_length,
+                        success=False,
+                        action="rejected_policy_precheck",
+                        total_elapsed=time.monotonic() - t0,
+                        ev=ev,
+                    )
                 continue
             dyn_cap = budget.pattern_time_cap
-            if pattern_fail_streak >= 2:
+            if size == 7 and pattern_fail_streak >= 2:
                 dyn_cap = min(dyn_cap, 6.0)
+            elif size == 12:
+                if pattern_fail_streak >= 2:
+                    dyn_cap = min(dyn_cap, 5.0)
+                if pattern_fail_streak >= 4:
+                    dyn_cap = min(dyn_cap, 3.5)
+            elif size == 10:
+                if pattern_fail_streak >= 1:
+                    dyn_cap = min(dyn_cap, 10.0)
+                if pattern_fail_streak >= 3:
+                    dyn_cap = min(dyn_cap, 5.0)
+            elif pattern_fail_streak >= 2:
+                dyn_cap = min(dyn_cap, 8.0)
             result = _try_pattern_fill(
                 size=size,
                 pattern_id=entry.id,
@@ -901,55 +929,7 @@ def generate_crossword(
                 t0=t0,
                 store=store,
                 diagnostic=diagnostic,
-                strict_policy=True,
-                pattern_entry=entry,
-                pattern_time_cap=dyn_cap,
-            )
-            if result is not None:
-                return result
-            pattern_fail_streak += 1
-
-    if size == 12:
-        pattern_tracker = get_pattern_stats_tracker()
-        pattern_order = select_12_pattern_order(rng, tracker=pattern_tracker)
-        pattern_fail_streak = 0
-        for entry in pattern_order:
-            if time.monotonic() > deadline:
-                break
-            grid = pattern_to_grid(entry.grid)
-            lengths = [s.length for s in extract_slots(grid)]
-            ev = _evaluate_slots_for_size(size, lengths, strict_long=True)
-            if not ev.accepted:
-                _log_12_pattern_attempt(
-                    entry.id,
-                    tier=entry.tier,
-                    total_slots=entry.total_slot_count,
-                    max_len=entry.max_slot_length,
-                    success=False,
-                    action="rejected_policy_precheck",
-                    total_elapsed=time.monotonic() - t0,
-                    ev=ev,
-                )
-                continue
-            dyn_cap = budget.pattern_time_cap
-            if pattern_fail_streak >= 2:
-                dyn_cap = min(dyn_cap, 5.0)
-            if pattern_fail_streak >= 4:
-                dyn_cap = min(dyn_cap, 3.5)
-            result = _try_pattern_fill(
-                size=size,
-                pattern_id=entry.id,
-                grid=grid,
-                dictionary=dictionary,
-                word_scores=word_scores,
-                rng=rng,
-                diag=diag,
-                budget=budget,
-                deadline=deadline,
-                t0=t0,
-                store=store,
-                diagnostic=diagnostic,
-                strict_policy=True,
+                strict_policy=(size in (7, 12)),
                 pattern_entry=entry,
                 pattern_time_cap=dyn_cap,
             )

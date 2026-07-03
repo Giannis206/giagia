@@ -1,8 +1,9 @@
-"""In-memory runtime stats for 12x12 pattern fill performance."""
+"""In-memory runtime stats and recent-use diversity for pattern selection."""
 
 from __future__ import annotations
 
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 
 
@@ -33,7 +34,27 @@ class PatternStatsTracker:
 
     def __init__(self) -> None:
         self._stats: dict[str, PatternRuntimeStats] = {}
+        self._recent_ids: deque[str] = deque(maxlen=24)
         self._lock = threading.Lock()
+
+    def record_selection(self, pattern_id: str) -> None:
+        """Track pattern chosen for a fill attempt (diversity protection)."""
+        with self._lock:
+            self._recent_ids.append(pattern_id)
+
+    def diversity_weight(self, pattern_id: str) -> float:
+        """Penalize patterns used very recently when alternatives exist."""
+        with self._lock:
+            if not self._recent_ids:
+                return 1.0
+            count = sum(1 for pid in self._recent_ids if pid == pattern_id)
+            if count >= 3:
+                return 0.35
+            if count == 2:
+                return 0.55
+            if count == 1 and len(self._recent_ids) >= 6:
+                return 0.8
+            return 1.0
 
     def get(self, pattern_id: str) -> PatternRuntimeStats:
         with self._lock:

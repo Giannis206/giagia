@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -13,6 +15,36 @@ from crossword.grid import BLACK, Grid, WHITE
 from crossword.slots import extract_slots
 from crossword.slot_policy import slot_length_histogram
 from crossword.validate import validate_pattern
+
+CATALOG_DIR = Path(__file__).resolve().parent.parent / "data" / "pattern_catalogs"
+CATALOG_SIZES = frozenset({7, 8, 10, 12})
+
+CATALOG_TIME_FRACTION: dict[int, float] = {
+    7: 1.0,
+    8: 0.9,
+    10: 0.42,
+    12: 0.72,
+}
+
+MAX_CATALOG_PATTERNS: dict[int, int] = {
+    10: 6,
+    12: 11,
+}
+
+# Legacy 12x12 fallback ids used when include_legacy=False
+_P12_FALLBACK_IDS = frozenset({
+    "p12_fb_seed487",
+    "p12_fb_seed1708",
+    "p12_fb_seed1883",
+    "p12_fb_seed1968",
+})
+
+# Hand-tuned 12x12 primaries — always tried before discovered layouts
+_P12_HAND_PRIMARY_IDS = frozenset({
+    "p12_i_seed89",
+    "p12_j_seed292",
+    "p12_k_seed983",
+})
 
 # 0 = white (letter cell), 1 = black block
 
@@ -319,6 +351,7 @@ def pattern_selection_weight(
     """Higher weight for lower max slot length, richer slot counts, and runtime success."""
     grid_size = len(entry.grid)
     runtime = tracker.runtime_weight(entry.id) if tracker is not None else 1.0
+    diversity = tracker.diversity_weight(entry.id) if tracker is not None else 1.0
 
     if grid_size == 7 and entry.layout_score > 0:
         from crossword.pattern7 import pattern7_selection_weight
@@ -328,8 +361,18 @@ def pattern_selection_weight(
             slot_histogram=entry.slot_histogram,
             total_slot_count=entry.total_slot_count,
             tier=entry.tier,
-            tracker_weight=runtime,
+            tracker_weight=runtime * diversity,
         )
+
+    if entry.layout_score > 0:
+        weight = max(0.5, entry.layout_score) * runtime * diversity
+        if entry.tier == "primary":
+            weight *= 1.12
+        if grid_size == 12 and entry.max_slot_length <= 9:
+            weight *= 1.08
+        if entry.id in _P12_HAND_PRIMARY_IDS:
+            weight *= 2.5
+        return max(0.2, weight)
 
     weight = 1.0
     weight += (13 - entry.max_slot_length) * 3.0
@@ -338,7 +381,7 @@ def pattern_selection_weight(
         weight -= 3.0
     if entry.tier == "primary":
         weight += 1.5
-    weight *= runtime
+    weight *= runtime * diversity
     return max(0.2, weight)
 
 
@@ -394,14 +437,16 @@ def _entry_7(
     pattern: list[list[int]],
     tier: PatternTier,
 ) -> PatternEntry:
-    from crossword.pattern7 import score_pattern_histogram
+    from crossword.pattern_scoring import score_pattern_histogram
 
     grid = pattern_to_grid(pattern)
     slots = extract_slots(grid)
     lengths = [slot.length for slot in slots]
     hist = slot_length_histogram(lengths)
     blacks = sum(sum(row) for row in pattern)
-    score = score_pattern_histogram(hist, total_slots=len(slots), black_square_count=blacks)
+    score = score_pattern_histogram(
+        hist, grid_size=7, total_slots=len(slots), black_square_count=blacks
+    )
     return PatternEntry(
         id=pattern_id,
         source_seed=source_seed,
@@ -529,6 +574,129 @@ ENTRIES_BY_SIZE: dict[int, list[PatternEntry]] = {
 }
 
 
+def _grid_fingerprint(pattern: list[list[int]]) -> tuple:
+    return tuple(tuple(row) for row in pattern)
+
+
+def _entry_from_json(record: dict, grid_size: int) -> PatternEntry:
+    from crossword.pattern_scoring import score_pattern_histogram
+
+    grid = record["grid"]
+    hist_raw = record.get("histogram", {})
+    hist = {int(k): int(v) for k, v in hist_raw.items()}
+    blacks = int(record.get("black_count", sum(sum(row) for row in grid)))
+    slots = extract_slots(pattern_to_grid(grid))
+    total = int(record.get("total_slots", len(slots)))
+    if not hist:
+        hist = slot_length_histogram([s.length for s in slots])
+    score = float(record.get("score", 0))
+    if score <= 0:
+        score = score_pattern_histogram(
+            hist, grid_size=grid_size, total_slots=total, black_square_count=blacks
+        )
+    return PatternEntry(
+        id=str(record["id"]),
+        source_seed=record.get("source_seed"),
+        grid=grid,
+        max_slot_length=int(record.get("max_slot_length", max(hist) if hist else 0)),
+        total_slot_count=total,
+        tier=record.get("tier", "fallback"),
+        slot_histogram=hist,
+        black_square_count=blacks,
+        layout_score=score,
+    )
+
+
+def _load_json_catalog(size: int) -> list[PatternEntry]:
+    path = CATALOG_DIR / f"catalog_{size}.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [_entry_from_json(rec, size) for rec in data.get("patterns", [])]
+
+
+def _merge_pattern_entries(*groups: list[PatternEntry]) -> list[PatternEntry]:
+    out: list[PatternEntry] = []
+    seen_ids: set[str] = set()
+    seen_grids: set[tuple] = set()
+    for group in groups:
+        for entry in group:
+            fp = _grid_fingerprint(entry.grid)
+            if entry.id in seen_ids or fp in seen_grids:
+                continue
+            seen_ids.add(entry.id)
+            seen_grids.add(fp)
+            out.append(entry)
+    return out
+
+
+def _enrich_entry_12(entry: PatternEntry) -> PatternEntry:
+    """Add histogram/score metadata to legacy 12x12 entries if missing."""
+    if entry.layout_score > 0 and entry.slot_histogram:
+        return entry
+    from crossword.pattern_scoring import score_pattern_histogram
+
+    grid = pattern_to_grid(entry.grid)
+    slots = extract_slots(grid)
+    lengths = [s.length for s in slots]
+    hist = slot_length_histogram(lengths)
+    blacks = sum(sum(row) for row in entry.grid)
+    score = score_pattern_histogram(
+        hist, grid_size=12, total_slots=len(slots), black_square_count=blacks
+    )
+    return PatternEntry(
+        id=entry.id,
+        source_seed=entry.source_seed,
+        grid=entry.grid,
+        max_slot_length=entry.max_slot_length,
+        total_slot_count=entry.total_slot_count,
+        tier=entry.tier,
+        slot_histogram=hist,
+        black_square_count=blacks,
+        layout_score=score,
+    )
+
+
+def _finalize_multi_size_catalogs() -> None:
+    """Merge hand-tuned and discovered catalogs for 8/10/12."""
+    global PATTERNS_BY_SIZE, CATALOG_BY_SIZE, ENTRIES_BY_SIZE
+
+    base_12 = [_enrich_entry_12(e) for e in PATTERN_ENTRIES_12]
+    hand_12_primary = [e for e in base_12 if e.id in _P12_HAND_PRIMARY_IDS]
+    hand_12_fb = [e for e in base_12 if e.id in _P12_FALLBACK_IDS]
+    discovered_12 = [
+        PatternEntry(
+            id=e.id,
+            source_seed=e.source_seed,
+            grid=e.grid,
+            max_slot_length=e.max_slot_length,
+            total_slot_count=e.total_slot_count,
+            tier="fallback",
+            slot_histogram=e.slot_histogram,
+            black_square_count=e.black_square_count,
+            layout_score=e.layout_score,
+        )
+        for e in _load_json_catalog(12)
+    ]
+    merged_12 = _merge_pattern_entries(hand_12_primary, hand_12_fb, discovered_12)
+
+    entries_8 = _load_json_catalog(8)
+    entries_10 = _load_json_catalog(10)
+
+    ENTRIES_BY_SIZE[12] = merged_12
+    if entries_8:
+        ENTRIES_BY_SIZE[8] = entries_8
+        PATTERNS_BY_SIZE[8] = [e.grid for e in entries_8]
+        CATALOG_BY_SIZE[8] = [(e.id, e.grid) for e in entries_8]
+    if entries_10:
+        ENTRIES_BY_SIZE[10] = entries_10
+        PATTERNS_BY_SIZE[10] = [e.grid for e in entries_10]
+        CATALOG_BY_SIZE[10] = [(e.id, e.grid) for e in entries_10]
+
+    PATTERNS_BY_SIZE[12] = [e.grid for e in merged_12]
+    CATALOG_BY_SIZE[12] = [(e.id, e.grid) for e in merged_12]
+
+
 def get_patterns(size: int) -> list[list[list[int]]]:
     return PATTERNS_BY_SIZE.get(size, [])
 
@@ -545,18 +713,44 @@ def get_pattern_entries(size: int, *, tier: PatternTier | None = None) -> list[P
     return [entry for entry in entries if entry.tier == tier]
 
 
+def select_pattern_order(
+    size: int,
+    rng: random.Random,
+    *,
+    tracker: PatternStatsTracker | None = None,
+    include_legacy_12: bool = False,
+) -> list[PatternEntry]:
+    """Weighted primary-then-fallback order for catalog-backed sizes."""
+    if size == 12 and not include_legacy_12:
+        primary = [
+            e for e in get_pattern_entries(12, tier="primary")
+            if e.id in _P12_HAND_PRIMARY_IDS
+        ]
+        hand_fb = [
+            e for e in get_pattern_entries(12, tier="fallback")
+            if e.id in _P12_FALLBACK_IDS
+        ]
+        discovered_fb = [
+            e for e in get_pattern_entries(12, tier="fallback")
+            if e.id not in _P12_FALLBACK_IDS
+        ]
+        fallback = hand_fb + discovered_fb
+    else:
+        primary = get_pattern_entries(size, tier="primary")
+        fallback = get_pattern_entries(size, tier="fallback")
+
+    return (
+        weighted_pattern_order(primary, rng, tracker)
+        + weighted_pattern_order(fallback, rng, tracker)
+    )
+
+
 def select_7_pattern_order(
     rng: random.Random,
     *,
     tracker: PatternStatsTracker | None = None,
 ) -> list[PatternEntry]:
-    """Primary 7x7 patterns first, then fallback (weighted by layout score)."""
-    primary = get_pattern_entries(7, tier="primary")
-    fallback = get_pattern_entries(7, tier="fallback")
-    return (
-        weighted_pattern_order(primary, rng, tracker)
-        + weighted_pattern_order(fallback, rng, tracker)
-    )
+    return select_pattern_order(7, rng, tracker=tracker)
 
 
 def select_12_pattern_order(
@@ -565,21 +759,8 @@ def select_12_pattern_order(
     include_legacy: bool = False,
     tracker: PatternStatsTracker | None = None,
 ) -> list[PatternEntry]:
-    """Primary tier first (weighted), then fallback tier (weighted)."""
-    primary = get_pattern_entries(12, tier="primary")
-    fallback_ids = {
-        "p12_fb_seed487",
-        "p12_fb_seed1708",
-        "p12_fb_seed1883",
-        "p12_fb_seed1968",
-    }
-    if include_legacy:
-        fallback = [e for e in get_pattern_entries(12, tier="fallback")]
-    else:
-        fallback = [e for e in get_pattern_entries(12, tier="fallback") if e.id in fallback_ids]
-    return (
-        weighted_pattern_order(primary, rng, tracker)
-        + weighted_pattern_order(fallback, rng, tracker)
+    return select_pattern_order(
+        12, rng, tracker=tracker, include_legacy_12=include_legacy
     )
 
 
@@ -596,12 +777,12 @@ def random_pattern_grid(size: int, rng: random.Random | None = None) -> Grid | N
     return None
 
 
+_finalize_multi_size_catalogs()
+
 for _size, _plist in PATTERNS_BY_SIZE.items():
     for _p in _plist:
         _validate_stored_pattern(_p, _size)
 
-for _pid, _p in PATTERN_CATALOG_12:
-    _validate_stored_pattern(_p, 12)
-
-for _entry in PATTERN_ENTRIES_7:
-    _validate_stored_pattern(_entry.grid, 7)
+for _size, _entries in ENTRIES_BY_SIZE.items():
+    for _entry in _entries:
+        _validate_stored_pattern(_entry.grid, _size)
