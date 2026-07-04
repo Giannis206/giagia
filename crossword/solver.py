@@ -595,6 +595,8 @@ class GenerationResult:
     state: SolverState
     words: list[str]
     pattern_id: str = ""
+    helper: "HelperWordInfo | None" = None
+    clue_words: list[str] | None = None
 
 
 def _grid_from_pattern_rows(size: int, rows: list[str]) -> Grid:
@@ -1142,7 +1144,7 @@ def generate_crossword(
             attempt_diag_out=_new_attempt_diag(attempt_diags, pattern_id=str(pattern_id), grid_size=size),
         )
         if result is not None:
-            return result
+            return _return_with_helper(result)
 
     late_12_entries: list[PatternEntry] = []
 
@@ -1232,7 +1234,7 @@ def generate_crossword(
                     ),
                 )
                 if result is not None:
-                    return result
+                    return _return_with_helper(result)
                 pattern_fail_streak += 1
     elif (catalog := get_pattern_catalog(size)):
         scored_catalog: list[tuple[float, str, list[list[int]]]] = []
@@ -1270,7 +1272,7 @@ def generate_crossword(
                 strict_policy=(size == 12),
             )
             if result is not None:
-                return result
+                return _return_with_helper(result)
     elif get_patterns(size):
         builtin_order = get_patterns(size)[:]
         rng.shuffle(builtin_order)
@@ -1294,7 +1296,7 @@ def generate_crossword(
                 strict_policy=(size == 12),
             )
             if result is not None:
-                return result
+                return _return_with_helper(result)
 
     pattern_candidates: list[tuple[float, int, Grid, list[Slot]]] = []
     for _ in range(max_pattern_attempts * 2):
@@ -1345,7 +1347,7 @@ def generate_crossword(
             ),
         )
         if result is not None:
-            return result
+            return _return_with_helper(result)
 
     if late_12_entries:
         pattern_fail_streak = 0
@@ -1387,7 +1389,7 @@ def generate_crossword(
                 ),
             )
             if result is not None:
-                return result
+                return _return_with_helper(result)
             pattern_fail_streak += 1
 
     diag.elapsed_seconds = time.monotonic() - t0
@@ -1397,6 +1399,12 @@ def generate_crossword(
         diagnostics=diag.summary()
         + (f"; last_error={last_error}" if last_error else ""),
     )
+
+
+def _return_with_helper(result: GenerationResult) -> GenerationResult:
+    from crossword.helper_word import finalize_helper_word
+
+    return finalize_helper_word(result)
 
 
 def generate_crossword_with_fallback(

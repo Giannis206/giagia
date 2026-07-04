@@ -14,6 +14,9 @@
 <body>
   <section class="page page-grid" aria-label="Σελίδα πλέγματος">
     <h1 class="visually-hidden">{{ title }} — Πλέγμα</h1>
+    {% if helper %}
+    <p class="helper-note">Μία λέξη δίνεται στο πλέγμα ως βοήθεια (γκρι κελιά).</p>
+    {% endif %}
     <div class="grid-wrap">
       {{ grid_svg | safe }}
     </div>

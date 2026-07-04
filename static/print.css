@@ -55,6 +55,14 @@ html, body {
   padding: 0;
 }
 
+.helper-note {
+  margin: 0 0 3mm;
+  font-size: 11pt;
+  font-weight: 600;
+  text-align: center;
+  color: #333;
+}
+
 .grid-wrap {
   display: flex;
   align-items: center;

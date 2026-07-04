@@ -9,6 +9,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
+from crossword.helper_word import prefilled_letters
 from crossword.render import render_printable_html
 from crossword.solver import CrosswordGenerationError, generate_crossword
 
@@ -31,13 +32,17 @@ def _configure_stdio() -> None:
                 pass
 
 
-def _save_meta(seed: int | None, size: int, word_count: int) -> None:
+def _save_meta(seed: int | None, size: int, word_count: int, result=None) -> None:
+    payload: dict = {"seed": seed, "size": size, "word_count": word_count}
+    if result is not None and result.helper is not None:
+        payload["helper"] = {
+            "helper_entry_id": result.helper.helper_entry_id,
+            "helper_word": result.helper.helper_word,
+            "helper_direction": result.helper.helper_direction,
+            "helper_cells": [list(cell) for cell in result.helper.helper_cells],
+        }
     META_PATH.write_text(
-        json.dumps(
-            {"seed": seed, "size": size, "word_count": word_count},
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -64,17 +69,25 @@ def do_generate(
         raise
     render_printable_html(
         result.grid,
-        result.words,
+        result.clue_words or result.words,
         HTML_PATH,
         project_root=ROOT,
         show_letters=False,
         css_href=css_href,
+        helper=result.helper,
+        prefilled_letters=prefilled_letters(result),
     )
-    _save_meta(seed, size, len(result.words))
+    clue_count = len(result.clue_words or result.words)
+    _save_meta(seed, size, clue_count, result=result)
     print(f"Έτοιμο: {HTML_PATH}")
-    print(f"Λέξεις: {len(result.words)} | Μέγεθος πλέγματος: {size}x{size}")
+    if result.helper is not None:
+        direction = "Οριζόντια" if result.helper.helper_direction == "across" else "Κάθετα"
+        print(
+            f"Βοήθεια: #{result.helper.helper_entry_id} {result.helper.helper_word} ({direction})"
+        )
+    print(f"Λέξεις: {clue_count} | Μέγεθος πλέγματος: {size}x{size}")
     return {
-        "words": len(result.words),
+        "words": clue_count,
         "size": result.grid.size,
         "path": str(HTML_PATH),
     }
