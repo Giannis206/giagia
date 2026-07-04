@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 data/greek_words.db
+
+# Generated runtime / test output (keep directory via .gitkeep)
+output/*
+!output/.gitkeep
