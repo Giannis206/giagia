@@ -17,16 +17,38 @@ if TYPE_CHECKING:
     from crossword.puzzle_hints import PuzzleHints
 
 # A4 portrait printable area with 5mm @page margins (210 - 10 = 200mm wide)
-PRINT_GRID_MM = 200.0
+PRINT_GRID_MM = 186.0
 CELL_UNITS = 100
-LINE_WIDTH = 8
-NUMBER_FONT = CELL_UNITS * 0.22
-LETTER_FONT = CELL_UNITS * 0.58
+LINE_WIDTH = 9
 
-# Subtle fill colours for prefilled cells (print-safe, low contrast)
-PRIMARY_HELPER_FILL = "#e8e8e8"
-SECONDARY_HELPER_FILL = "#dce8f5"
-HINT_LETTER_FILL = "#fff6e0"
+# SVG font sizes as fraction of cell (large-print: letters ≥ ~18pt when printed)
+_LETTER_RATIO_BY_SIZE = {
+    7: 0.64,
+    8: 0.62,
+    10: 0.60,
+    12: 0.58,
+    15: 0.55,
+}
+_NUMBER_RATIO_BY_SIZE = {
+    7: 0.28,
+    8: 0.27,
+    10: 0.26,
+    12: 0.25,
+    15: 0.24,
+}
+
+# High-contrast text on soft helper backgrounds (print-safe)
+PRIMARY_HELPER_FILL = "#f0ebe3"
+SECONDARY_HELPER_FILL = "#e8eef5"
+HINT_LETTER_FILL = "#f5f0e6"
+INK_COLOR = "#111111"
+
+
+def _svg_font_sizes(grid_size: int) -> tuple[float, float]:
+    """Letter and clue-number font sizes inside SVG cells."""
+    letter_ratio = _LETTER_RATIO_BY_SIZE.get(grid_size, 0.58)
+    number_ratio = _NUMBER_RATIO_BY_SIZE.get(grid_size, 0.25)
+    return CELL_UNITS * letter_ratio, CELL_UNITS * number_ratio
 
 
 def _build_grid_svg(
@@ -48,13 +70,14 @@ def _build_grid_svg(
     secondary = secondary_helper_cells or set()
     hints_only = hint_letter_cells or set()
     numbers = clue_numbers or {}
+    letter_font, number_font = _svg_font_sizes(size)
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {span} {span}" '
         f'class="crossword-svg{" easy-mode" if easy_mode else ""}" '
         f'role="img" aria-label="Πλέγμα σταυρόλεξου" '
         f'shape-rendering="geometricPrecision">',
-        f'<rect x="0" y="0" width="{span}" height="{span}" fill="#ffffff"/>',
+        f'<rect x="0" y="0" width="{span}" height="{span}" fill="#fffef8"/>',
     ]
 
     for row in range(size):
@@ -109,8 +132,8 @@ def _build_grid_svg(
         parts.append(
             f'<text x="{x:.1f}" y="{y:.1f}" '
             f'text-anchor="start" dominant-baseline="hanging" '
-            f'font-family="Segoe UI, Arial, sans-serif" '
-            f'font-size="{NUMBER_FONT:.1f}" font-weight="700" fill="#000000">'
+            f'font-family="Segoe UI, Arial, Helvetica, sans-serif" '
+            f'font-size="{number_font:.1f}" font-weight="700" fill="{INK_COLOR}">'
             f"{number}</text>"
         )
 
@@ -124,24 +147,20 @@ def _build_grid_svg(
                 continue
             cell = (row, col)
             cx = col * CELL_UNITS + CELL_UNITS / 2
-            cy = row * CELL_UNITS + CELL_UNITS / 2
+            cy = row * CELL_UNITS + CELL_UNITS / 2 + 1
             if cell in primary:
-                fill = "#1a1a1a"
                 letter_class = "helper-letter helper-primary-letter"
             elif cell in secondary:
-                fill = "#1a3050"
                 letter_class = "helper-letter helper-secondary-letter"
             elif cell in hints_only:
-                fill = "#4a4020"
                 letter_class = "hint-letter"
             else:
-                fill = "#000000"
                 letter_class = ""
             parts.append(
                 f'<text x="{cx:.1f}" y="{cy:.1f}" '
                 f'text-anchor="middle" dominant-baseline="central" '
-                f'font-family="Segoe UI, Arial, sans-serif" '
-                f'font-size="{LETTER_FONT:.1f}" font-weight="700" fill="{fill}"'
+                f'font-family="Segoe UI, Arial, Helvetica, sans-serif" '
+                f'font-size="{letter_font:.1f}" font-weight="700" fill="{INK_COLOR}"'
                 f'{" class=\"" + letter_class + "\"" if letter_class else ""}>'
                 f"{val}</text>"
             )

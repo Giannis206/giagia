@@ -13,25 +13,44 @@
 </head>
 <body>
   <section class="page page-grid" aria-label="Σελίδα πλέγματος">
-    <h1 class="visually-hidden">{{ title }} — Πλέγμα</h1>
+    <header class="print-header">
+      <h1 class="print-title">Σταυρόλεξο {{ grid_size }}×{{ grid_size }}</h1>
+      <p class="print-meta">
+        Δυσκολία:
+        <span class="difficulty-badge difficulty-{{ difficulty }}">
+          {% if easy_mode %}εύκολη{% else %}κανονική{% endif %}
+        </span>
+      </p>
+    </header>
+
     {% if easy_mode and puzzle_hints %}
     <p class="helper-note easy-note">
-      Εύκολο mode: {{ puzzle_hints.helper_word_count }} λέξεις δίνονται στο πλέγμα
+      Δίνονται {{ puzzle_hints.helper_word_count }} λέξεις στο πλέγμα
       {% if puzzle_hints.extra_letter_count > 0 %}
-      + {{ puzzle_hints.extra_letter_count }} βοηθητικά γράμματα
+      και {{ puzzle_hints.extra_letter_count }} βοηθητικά γράμματα
       {% endif %}
-      (γκρι/μπλε κελιά).
+      (ανοιχτό κρεμ / απαλό μπλε φόντο).
     </p>
     {% elif helper %}
-    <p class="helper-note">Μία λέξη δίνεται στο πλέγμα ως βοήθεια (γκρι κελιά).</p>
+    <p class="helper-note">Μία λέξη δίνεται στο πλέγμα ως βοήθεια (ανοιχτό κρεμ φόντο).</p>
     {% endif %}
+
     <div class="grid-wrap">
       {{ grid_svg | safe }}
     </div>
   </section>
 
   <section class="page page-words {{ words_layout_class }}" aria-label="Σελίδα λέξεων">
-    <h1 class="words-title">Λέξεις ({{ total_words }})</h1>
+    <header class="print-header print-header-words">
+      <h1 class="words-title">Λέξεις ({{ total_words }})</h1>
+      <p class="print-meta">
+        Δυσκολία:
+        <span class="difficulty-badge difficulty-{{ difficulty }}">
+          {% if easy_mode %}εύκολη{% else %}κανονική{% endif %}
+        </span>
+      </p>
+    </header>
+
     {% for group in word_groups %}
     <div class="word-group">
       <h2>{{ group.length }} γράμματα</h2>
