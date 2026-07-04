@@ -9,8 +9,7 @@ from typing import TYPE_CHECKING
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from crossword.grid import BLACK, Grid
-from crossword.helper_word import assign_clue_numbers
-from crossword.slots import extract_slots
+from crossword.slots import Slot, extract_slots
 
 if TYPE_CHECKING:
     from crossword.helper_word import HelperWordInfo
@@ -36,6 +35,14 @@ _NUMBER_RATIO_BY_SIZE = {
     12: 0.25,
     15: 0.24,
 }
+# Compact length hints in word-start cells (smaller than main letters)
+_LENGTH_LABEL_RATIO_BY_SIZE = {
+    7: 0.20,
+    8: 0.19,
+    10: 0.18,
+    12: 0.17,
+    15: 0.16,
+}
 
 # High-contrast text on soft helper backgrounds (print-safe)
 PRIMARY_HELPER_FILL = "#f0ebe3"
@@ -44,11 +51,46 @@ HINT_LETTER_FILL = "#f5f0e6"
 INK_COLOR = "#111111"
 
 
-def _svg_font_sizes(grid_size: int) -> tuple[float, float]:
-    """Letter and clue-number font sizes inside SVG cells."""
+def _svg_font_sizes(grid_size: int) -> tuple[float, float, float]:
+    """Letter font, legacy number font, and compact start-cell length label font."""
     letter_ratio = _LETTER_RATIO_BY_SIZE.get(grid_size, 0.58)
     number_ratio = _NUMBER_RATIO_BY_SIZE.get(grid_size, 0.25)
-    return CELL_UNITS * letter_ratio, CELL_UNITS * number_ratio
+    label_ratio = _LENGTH_LABEL_RATIO_BY_SIZE.get(grid_size, 0.18)
+    return (
+        CELL_UNITS * letter_ratio,
+        CELL_UNITS * number_ratio,
+        CELL_UNITS * label_ratio,
+    )
+
+
+def assign_start_cell_length_labels(slots: list[Slot]) -> dict[tuple[int, int], str]:
+    """Render-only labels: word length at each across/down start cell."""
+    by_start: dict[tuple[int, int], dict[str, int]] = {}
+    for slot in slots:
+        key = (slot.row, slot.col)
+        by_start.setdefault(key, {})[slot.direction] = slot.length
+
+    labels: dict[tuple[int, int], str] = {}
+    for (row, col), lengths in by_start.items():
+        across = lengths.get("across")
+        down = lengths.get("down")
+        if across is not None and down is not None:
+            labels[(row, col)] = f"{across}/{down}"
+        elif across is not None:
+            labels[(row, col)] = str(across)
+        elif down is not None:
+            labels[(row, col)] = str(down)
+    return labels
+
+
+def _label_font_size(base: float, label: str) -> float:
+    """Shrink font slightly for wider across/down notation (e.g. 10/12)."""
+    n = len(label)
+    if n <= 2:
+        return base
+    if n <= 4:
+        return base * 0.9
+    return base * 0.8
 
 
 def _build_grid_svg(
@@ -59,7 +101,7 @@ def _build_grid_svg(
     primary_helper_cells: set[tuple[int, int]] | None = None,
     secondary_helper_cells: set[tuple[int, int]] | None = None,
     hint_letter_cells: set[tuple[int, int]] | None = None,
-    clue_numbers: dict[tuple[int, int], int] | None = None,
+    start_cell_labels: dict[tuple[int, int], str] | None = None,
     easy_mode: bool = False,
 ) -> str:
     """Sharp SVG grid — ideal for print/PDF (no table border-collapse artifacts)."""
@@ -69,8 +111,8 @@ def _build_grid_svg(
     primary = primary_helper_cells or set()
     secondary = secondary_helper_cells or set()
     hints_only = hint_letter_cells or set()
-    numbers = clue_numbers or {}
-    letter_font, number_font = _svg_font_sizes(size)
+    labels = start_cell_labels or {}
+    letter_font, _, label_font_base = _svg_font_sizes(size)
     parts: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {span} {span}" '
@@ -126,15 +168,17 @@ def _build_grid_svg(
             f'stroke="#000000" stroke-width="{LINE_WIDTH}" stroke-linecap="square"/>'
         )
 
-    for (row, col), number in numbers.items():
-        x = col * CELL_UNITS + CELL_UNITS * 0.12
-        y = row * CELL_UNITS + CELL_UNITS * 0.24
+    for (row, col), label in labels.items():
+        label_font = _label_font_size(label_font_base, label)
+        x = col * CELL_UNITS + CELL_UNITS * 0.10
+        y = row * CELL_UNITS + CELL_UNITS * 0.18
         parts.append(
             f'<text x="{x:.1f}" y="{y:.1f}" '
             f'text-anchor="start" dominant-baseline="hanging" '
             f'font-family="Segoe UI, Arial, Helvetica, sans-serif" '
-            f'font-size="{number_font:.1f}" font-weight="700" fill="{INK_COLOR}">'
-            f"{number}</text>"
+            f'font-size="{label_font:.1f}" font-weight="600" fill="#333333" '
+            f'class="start-length-label">'
+            f"{label}</text>"
         )
 
     for row in range(size):
@@ -210,7 +254,7 @@ def render_printable_html(
 
     css_rel = css_href if css_href is not None else "../static/print.css"
     slots = extract_slots(grid)
-    clue_numbers = assign_clue_numbers(slots, grid.size)
+    start_labels = assign_start_cell_length_labels(slots)
 
     easy_mode = difficulty == "easy"
     primary_cells: set[tuple[int, int]] = set()
@@ -235,7 +279,7 @@ def render_printable_html(
             primary_helper_cells=primary_cells,
             secondary_helper_cells=secondary_cells,
             hint_letter_cells=hint_cells,
-            clue_numbers=clue_numbers,
+            start_cell_labels=start_labels,
             easy_mode=easy_mode,
         ),
         grid_size=grid.size,
