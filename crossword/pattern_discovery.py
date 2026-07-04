@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
+from crossword.domain_propagation import check_arc_consistency
 from crossword.grid import BLACK, generate_symmetric_pattern
 from crossword.pattern_scoring import (
     block_density,
@@ -36,6 +37,7 @@ def discover_patterns(
     max_seed: int = 10_000,
     black_ratios: tuple[float, ...] | None = None,
     max_attempts_per_seed: int = 120,
+    dictionary: dict[int, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Search seeds for unique valid symmetric patterns."""
     if black_ratios is None:
@@ -82,6 +84,10 @@ def discover_patterns(
             )
             if not ev.accepted:
                 continue
+            if dictionary is not None:
+                ac3_ok, _, _ = check_arc_consistency(slots, dictionary)
+                if not ac3_ok:
+                    continue
             hist = slot_length_histogram(lengths)
             short = sum(hist.get(l, 0) for l in (3,))
             mid = sum(hist.get(l, 0) for l in range(4, min(9, size + 1)))

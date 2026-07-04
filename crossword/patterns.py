@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from crossword.pattern_stats import PatternStatsTracker
 
 from crossword.grid import BLACK, Grid, WHITE
+from crossword.pattern_classification import (
+    load_profiles_from_diagnostics,
+    partition_catalog_entries_10,
+)
 from crossword.slots import extract_slots
 from crossword.slot_policy import slot_length_histogram
 from crossword.validate import validate_pattern
@@ -23,12 +27,7 @@ CATALOG_TIME_FRACTION: dict[int, float] = {
     7: 1.0,
     8: 0.9,
     10: 0.42,
-    12: 0.72,
-}
-
-MAX_CATALOG_PATTERNS: dict[int, int] = {
-    10: 6,
-    12: 11,
+    12: 0.40,
 }
 
 # Legacy 12x12 fallback ids used when include_legacy=False
@@ -46,9 +45,66 @@ _P12_HAND_PRIMARY_IDS = frozenset({
     "p12_k_seed983",
 })
 
+_P12_HAND_PRIMARY_ORDER = (
+    "p12_i_seed89",
+    "p12_j_seed292",
+    "p12_k_seed983",
+)
+
+# Proven 10x10 layouts promoted from successful random_seed diagnostics runs.
+_P10_CORE_IDS = frozenset({
+    "p10_core_a",
+    "p10_core_b",
+    "p10_core_c",
+    "p10_core_d",
+    "p10_core_e",
+    "p10_core_f",
+})
+
+_P10_CORE_ORDER = (
+    "p10_core_a",
+    "p10_core_b",
+    "p10_core_c",
+    "p10_core_d",
+    "p10_core_e",
+    "p10_core_f",
+)
+
+P10_CORE_COUNT = len(_P10_CORE_ORDER)
+
+MAX_CATALOG_PATTERNS: dict[int, int] = {
+    10: P10_CORE_COUNT + 4,
+    12: 3,
+}
+
+# Hand-tuned 12x12 catalog attempts before any discovered late fallback.
+P12_PRIMARY_COUNT = len(_P12_HAND_PRIMARY_ORDER)
+P12_HAND_CATALOG_LIMIT = P12_PRIMARY_COUNT + len(_P12_FALLBACK_IDS)
+
+
+def entry_is_hand_primary(entry: PatternEntry) -> bool:
+    return entry.id in _P12_HAND_PRIMARY_IDS
+
+
+def entry_is_core_10(entry: PatternEntry) -> bool:
+    return entry.id in _P10_CORE_IDS
+
+
+def is_core_10_pattern_id(pattern_id: str) -> bool:
+    return pattern_id in _P10_CORE_IDS
+
+
+def entry_is_discovered_12(entry: PatternEntry) -> bool:
+    return (
+        len(entry.grid) == 12
+        and entry.id not in _P12_HAND_PRIMARY_IDS
+        and entry.id not in _P12_FALLBACK_IDS
+    )
+
+
 # 0 = white (letter cell), 1 = black block
 
-PatternTier = Literal["primary", "fallback"]
+PatternTier = Literal["primary", "fallback", "archive"]
 
 
 @dataclass(frozen=True)
@@ -64,6 +120,18 @@ class PatternEntry:
     slot_histogram: dict[int, int] | None = None
     black_square_count: int = 0
     layout_score: float = 0.0
+    fillability_score: float = 0.0
+    combined_score: float = 0.0
+    fillability_passed: bool = True
+    probe_success_rate: float = 0.0
+
+    @property
+    def selection_score(self) -> float:
+        if self.combined_score > 0:
+            return self.combined_score
+        if self.fillability_score > 0:
+            return self.fillability_score * 0.65 + self.layout_score * 0.35
+        return self.layout_score
 
     @property
     def name(self) -> str:
@@ -364,14 +432,29 @@ def pattern_selection_weight(
             tracker_weight=runtime * diversity,
         )
 
-    if entry.layout_score > 0:
-        weight = max(0.5, entry.layout_score) * runtime * diversity
+    if entry.layout_score > 0 or entry.fillability_score > 0:
+        if grid_size == 12 and entry_is_discovered_12(entry):
+            if tracker is None or not tracker.has_runtime_success(entry.id):
+                return 0.05
+            ratio = tracker.runtime_success_ratio(entry.id)
+            weight = 0.35 + ratio * 2.4
+            weight *= tracker.runtime_weight(entry.id) * diversity
+            return max(0.2, weight)
+
+        weight = max(0.5, entry.selection_score) * runtime * diversity
         if entry.tier == "primary":
             weight *= 1.12
         if grid_size == 12 and entry.max_slot_length <= 9:
             weight *= 1.08
         if entry.id in _P12_HAND_PRIMARY_IDS:
             weight *= 2.5
+        if entry.id == "p12_i_seed89":
+            weight *= 1.35
+        if entry.probe_success_rate > 0:
+            weight *= 1.18
+        if tracker is not None:
+            weight *= tracker.late_fail_penalty(entry.id)
+            weight *= tracker.uninformative_penalty(entry.id)
         return max(0.2, weight)
 
     weight = 1.0
@@ -382,6 +465,9 @@ def pattern_selection_weight(
     if entry.tier == "primary":
         weight += 1.5
     weight *= runtime * diversity
+    if tracker is not None:
+        weight *= tracker.late_fail_penalty(entry.id)
+        weight *= tracker.uninformative_penalty(entry.id)
     return max(0.2, weight)
 
 
@@ -594,6 +680,23 @@ def _entry_from_json(record: dict, grid_size: int) -> PatternEntry:
         score = score_pattern_histogram(
             hist, grid_size=grid_size, total_slots=total, black_square_count=blacks
         )
+    fill_score = float(record.get("fillability_score", 0))
+    combined = float(record.get("combined_score", 0))
+    if combined <= 0 and fill_score > 0:
+        combined = fill_score * 0.65 + score * 0.35
+    passed = record.get("fillability_passed")
+    pid = str(record["id"])
+    hand_12 = pid in _P12_HAND_PRIMARY_IDS or pid in _P12_FALLBACK_IDS
+    if passed is None:
+        if grid_size == 12 and not hand_12:
+            fillability_passed = float(record.get("probe_success_rate", 0)) > 0
+        else:
+            fillability_passed = fill_score > 0 or grid_size not in (10, 12)
+    else:
+        if grid_size == 12 and not hand_12:
+            fillability_passed = bool(passed) and float(record.get("probe_success_rate", 0)) > 0
+        else:
+            fillability_passed = bool(passed)
     return PatternEntry(
         id=str(record["id"]),
         source_seed=record.get("source_seed"),
@@ -604,6 +707,10 @@ def _entry_from_json(record: dict, grid_size: int) -> PatternEntry:
         slot_histogram=hist,
         black_square_count=blacks,
         layout_score=score,
+        fillability_score=fill_score,
+        combined_score=combined,
+        fillability_passed=fillability_passed,
+        probe_success_rate=float(record.get("probe_success_rate", 0)),
     )
 
 
@@ -665,23 +772,40 @@ def _finalize_multi_size_catalogs() -> None:
     hand_12_primary = [e for e in base_12 if e.id in _P12_HAND_PRIMARY_IDS]
     hand_12_fb = [e for e in base_12 if e.id in _P12_FALLBACK_IDS]
     discovered_12 = [
+        e
+        for e in _load_json_catalog(12)
+        if e.id not in _P12_HAND_PRIMARY_IDS and e.id not in _P12_FALLBACK_IDS
+    ]
+    discovered_12 = [
         PatternEntry(
             id=e.id,
             source_seed=e.source_seed,
             grid=e.grid,
             max_slot_length=e.max_slot_length,
             total_slot_count=e.total_slot_count,
-            tier="fallback",
+            tier="archive",
             slot_histogram=e.slot_histogram,
             black_square_count=e.black_square_count,
             layout_score=e.layout_score,
+            fillability_score=e.fillability_score,
+            combined_score=e.combined_score,
+            fillability_passed=False,
+            probe_success_rate=e.probe_success_rate,
         )
-        for e in _load_json_catalog(12)
+        for e in discovered_12
     ]
     merged_12 = _merge_pattern_entries(hand_12_primary, hand_12_fb, discovered_12)
 
     entries_8 = _load_json_catalog(8)
-    entries_10 = _load_json_catalog(10)
+    raw_10 = _load_json_catalog(10)
+    core_10 = [e for e in raw_10 if e.id in _P10_CORE_IDS]
+    by_core_id = {e.id: e for e in core_10}
+    core_10_ordered = [by_core_id[pid] for pid in _P10_CORE_ORDER if pid in by_core_id]
+    probation_10 = [
+        e for e in raw_10
+        if e.id not in _P10_CORE_IDS and e.tier != "archive"
+    ]
+    entries_10 = _merge_pattern_entries(core_10_ordered, probation_10)
 
     ENTRIES_BY_SIZE[12] = merged_12
     if entries_8:
@@ -706,11 +830,50 @@ def get_pattern_catalog(size: int) -> list[tuple[str, list[list[int]]]]:
     return [entry for entry in CATALOG_BY_SIZE.get(size, [])]
 
 
+def _selectable_entries(entries: list[PatternEntry]) -> list[PatternEntry]:
+    """Patterns allowed in weighted selection (fillability-gated)."""
+    return [
+        entry
+        for entry in entries
+        if entry.fillability_passed and entry.tier != "archive"
+    ]
+
+
+def _discovered_12_runtime_fallback(
+    tracker: PatternStatsTracker | None,
+) -> list[PatternEntry]:
+    """Discovered 12x12 layouts only when runtime stats prove they fill."""
+    if tracker is None:
+        return []
+    return [
+        entry
+        for entry in get_pattern_entries(12)
+        if entry_is_discovered_12(entry) and tracker.has_runtime_success(entry.id)
+    ]
+
+
 def get_pattern_entries(size: int, *, tier: PatternTier | None = None) -> list[PatternEntry]:
     entries = ENTRIES_BY_SIZE.get(size, [])
     if tier is None:
         return list(entries)
     return [entry for entry in entries if entry.tier == tier]
+
+
+def _partition_by_runtime_tier(
+    entries: list[PatternEntry],
+    tracker: PatternStatsTracker | None,
+) -> tuple[list[PatternEntry], list[PatternEntry]]:
+    """Early catalog vs late fallback based on runtime diagnostics memory."""
+    if tracker is None:
+        return entries, []
+    early: list[PatternEntry] = []
+    late: list[PatternEntry] = []
+    for entry in entries:
+        if tracker.is_late_fail_pattern(entry.id) or tracker.is_uninformative_penalized(entry.id):
+            late.append(entry)
+        else:
+            early.append(entry)
+    return early, late
 
 
 def select_pattern_order(
@@ -722,22 +885,49 @@ def select_pattern_order(
 ) -> list[PatternEntry]:
     """Weighted primary-then-fallback order for catalog-backed sizes."""
     if size == 12 and not include_legacy_12:
-        primary = [
-            e for e in get_pattern_entries(12, tier="primary")
+        by_id = {
+            e.id: e
+            for e in get_pattern_entries(12, tier="primary")
             if e.id in _P12_HAND_PRIMARY_IDS
-        ]
+        }
+        primary = [by_id[pid] for pid in _P12_HAND_PRIMARY_ORDER if pid in by_id]
         hand_fb = [
             e for e in get_pattern_entries(12, tier="fallback")
             if e.id in _P12_FALLBACK_IDS
         ]
-        discovered_fb = [
-            e for e in get_pattern_entries(12, tier="fallback")
-            if e.id not in _P12_FALLBACK_IDS
-        ]
-        fallback = hand_fb + discovered_fb
-    else:
-        primary = get_pattern_entries(size, tier="primary")
-        fallback = get_pattern_entries(size, tier="fallback")
+        late = _discovered_12_runtime_fallback(tracker)
+        return (
+            primary
+            + weighted_pattern_order(hand_fb, rng, tracker)
+            + weighted_pattern_order(late, rng, tracker)
+        )
+    if size == 10:
+        load_profiles_from_diagnostics()
+        by_id = {e.id: e for e in get_pattern_entries(10)}
+        core = [by_id[pid] for pid in _P10_CORE_ORDER if pid in by_id]
+        primary = _selectable_entries(get_pattern_entries(10, tier="primary"))
+        fallback = _selectable_entries(get_pattern_entries(10, tier="fallback"))
+        _core_ids = set(_P10_CORE_IDS)
+        _, probation, _reject = partition_catalog_entries_10(
+            [e for e in primary + fallback if e.id not in _core_ids],
+            tracker=tracker,
+        )
+        return (
+            core
+            + weighted_pattern_order(probation, rng, tracker)
+        )
+
+    primary = _selectable_entries(get_pattern_entries(size, tier="primary"))
+    fallback = _selectable_entries(get_pattern_entries(size, tier="fallback"))
+    if size >= 10:
+        early_p, late_p = _partition_by_runtime_tier(primary, tracker)
+        early_f, late_f = _partition_by_runtime_tier(fallback, tracker)
+        return (
+            weighted_pattern_order(early_p, rng, tracker)
+            + weighted_pattern_order(early_f, rng, tracker)
+            + weighted_pattern_order(late_p, rng, tracker)
+            + weighted_pattern_order(late_f, rng, tracker)
+        )
 
     return (
         weighted_pattern_order(primary, rng, tracker)

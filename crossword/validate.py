@@ -26,6 +26,7 @@ def validate_solution(
     dictionary: dict[int, set[str]],
     *,
     allow_reuse: bool = False,
+    strict_starting_letters: bool = False,
 ) -> None:
     """Validate a fully filled crossword."""
     validate_pattern(grid, slots)
@@ -54,10 +55,14 @@ def validate_solution(
         if duplicates:
             raise ValueError(f"Duplicate words used: {', '.join(sorted(duplicates))}")
 
-    validate_starting_letter_distribution(used_words)
+    validate_starting_letter_distribution(
+        used_words,
+        strict=strict_starting_letters,
+    )
 
 
 MAX_STARTING_LETTER_RATIO = 0.40
+EXTREME_STARTING_LETTER_RATIO = 0.55
 BIAS_DEBUG_RATIO = 0.35
 
 
@@ -98,8 +103,9 @@ def validate_starting_letter_distribution(
     words: list[str],
     *,
     max_ratio: float = MAX_STARTING_LETTER_RATIO,
+    strict: bool = False,
 ) -> None:
-    """Reject puzzles where one starting letter dominates (>40% by default)."""
+    """Reject only in strict mode, or for extreme bias (>55%) in any mode."""
     if not words:
         return
     counts = Counter(w[0] for w in words if w)
@@ -107,7 +113,8 @@ def validate_starting_letter_distribution(
         return
     letter, count = counts.most_common(1)[0]
     ratio = count / len(words)
-    if ratio > max_ratio:
+    threshold = max_ratio if strict else EXTREME_STARTING_LETTER_RATIO
+    if ratio > threshold:
         raise ValueError(
             f"Starting letter bias: '{letter}' starts {count}/{len(words)} words ({ratio:.0%})"
         )
