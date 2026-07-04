@@ -278,8 +278,6 @@ def validate_helper_word(result: GenerationResult) -> None:
 
 def finalize_helper_word(result: GenerationResult) -> GenerationResult:
     """Attach helper metadata and player clue word list after a successful solve."""
-    helper = select_helper_word(result, word_scores=result.word_scores)
-    result.helper = helper
-    result.clue_words = clue_words_for_player(result.words, helper)
-    validate_helper_word(result)
-    return result
+    from crossword.puzzle_hints import finalize_puzzle_hints
+
+    return finalize_puzzle_hints(result, difficulty="normal")

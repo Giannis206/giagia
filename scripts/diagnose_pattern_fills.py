@@ -28,7 +28,7 @@ from crossword.solve_diagnostics import (
     analyze_presearch,
 )
 from crossword.pattern_stats import get_pattern_stats_tracker
-from crossword.helper_word import validate_helper_word
+from crossword.puzzle_hints import validate_puzzle_hints
 from crossword.solver import CrosswordGenerationError, generate_crossword
 
 
@@ -71,7 +71,7 @@ def run_seeds(
                 word_store=None,
                 attempt_diags=attempt_diags,
             )
-            validate_helper_word(result)
+            validate_puzzle_hints(result)
             elapsed = time.perf_counter() - t0
             run_rows.append({
                 "seed": seed,

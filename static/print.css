@@ -63,6 +63,12 @@ html, body {
   color: #333;
 }
 
+.helper-note.easy-note {
+  font-size: 10pt;
+  color: #444;
+}
+
+
 .grid-wrap {
   display: flex;
   align-items: center;

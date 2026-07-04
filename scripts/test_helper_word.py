@@ -14,11 +14,10 @@ from crossword.helper_word import (
     _FREQUENCY_WEIGHT,
     _LENGTH_WEIGHT,
     _POSITION_WEIGHT,
-    prefilled_letters,
     score_all_entries,
     select_helper_entry,
-    validate_helper_word,
 )
+from crossword.puzzle_hints import prefilled_letters_from_hints, validate_puzzle_hints
 from crossword.solver import CrosswordGenerationError, generate_crossword
 
 SIZES_SEEDS = {
@@ -67,7 +66,7 @@ def main() -> int:
             print(f"FAIL {size}x{size} seed={seed}: {exc}")
             return 1
 
-        validate_helper_word(result)
+        validate_puzzle_hints(result)
         entry = select_helper_entry(result, word_scores=result.word_scores)
         helper = result.helper
         assert helper is not None
@@ -76,8 +75,10 @@ def main() -> int:
             print(f"FAIL {size}x{size}: helper still in clue list")
             return 1
 
-        letters = prefilled_letters(result)
-        if len(letters) != len(helper.helper_cells):
+        letters = prefilled_letters_from_hints(result)
+        helper = result.puzzle_hints.primary_helper if result.puzzle_hints else result.helper
+        assert helper is not None
+        if len(letters) < len(helper.helper_cells):
             print(f"FAIL {size}x{size}: prefilled letter mismatch")
             return 1
 

@@ -14,7 +14,15 @@
 <body>
   <section class="page page-grid" aria-label="Σελίδα πλέγματος">
     <h1 class="visually-hidden">{{ title }} — Πλέγμα</h1>
-    {% if helper %}
+    {% if easy_mode and puzzle_hints %}
+    <p class="helper-note easy-note">
+      Εύκολο mode: {{ puzzle_hints.helper_word_count }} λέξεις δίνονται στο πλέγμα
+      {% if puzzle_hints.extra_letter_count > 0 %}
+      + {{ puzzle_hints.extra_letter_count }} βοηθητικά γράμματα
+      {% endif %}
+      (γκρι/μπλε κελιά).
+    </p>
+    {% elif helper %}
     <p class="helper-note">Μία λέξη δίνεται στο πλέγμα ως βοήθεια (γκρι κελιά).</p>
     {% endif %}
     <div class="grid-wrap">

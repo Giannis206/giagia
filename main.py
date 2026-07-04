@@ -9,7 +9,8 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from crossword.helper_word import prefilled_letters
+from crossword.difficulty import DifficultyMode, parse_difficulty
+from crossword.puzzle_hints import finalize_puzzle_hints, prefilled_letters_from_hints, validate_puzzle_hints
 from crossword.render import render_printable_html
 from crossword.solver import CrosswordGenerationError, generate_crossword
 
@@ -32,9 +33,27 @@ def _configure_stdio() -> None:
                 pass
 
 
-def _save_meta(seed: int | None, size: int, word_count: int, result=None) -> None:
-    payload: dict = {"seed": seed, "size": size, "word_count": word_count}
-    if result is not None and result.helper is not None:
+def _save_meta(
+    seed: int | None,
+    size: int,
+    word_count: int,
+    result=None,
+    *,
+    difficulty: str = "normal",
+) -> None:
+    payload: dict = {"seed": seed, "size": size, "word_count": word_count, "difficulty": difficulty}
+    hints = getattr(result, "puzzle_hints", None) if result is not None else None
+    if hints is not None:
+        payload["hints"] = {
+            "primary": hints.primary_helper.helper_word,
+            "secondary": (
+                hints.secondary_helper.helper_word
+                if hints.secondary_helper is not None
+                else None
+            ),
+            "extra_letters": len(hints.extra_hint_cells),
+        }
+    elif result is not None and result.helper is not None:
         payload["helper"] = {
             "helper_entry_id": result.helper.helper_entry_id,
             "helper_word": result.helper.helper_word,
@@ -53,10 +72,12 @@ def do_generate(
     size: int,
     allow_reuse: bool = False,
     css_href: str | None = None,
+    difficulty: DifficultyMode = "normal",
 ) -> dict[str, int | str]:
     if allow_reuse:
         print("Σημείωση: η επανάχρηση λέξεων απενεργοποιείται — μόνο πραγματικές λέξεις.")
-    print("Δημιουργία σταυρόλεξου...")
+    mode_label = "εύκολο" if difficulty == "easy" else "κανονικό"
+    print(f"Δημιουργία σταυρόλεξου ({mode_label} mode)...")
     try:
         result = generate_crossword(
             data_dir=DATA_DIR,
@@ -67,6 +88,10 @@ def do_generate(
         if exc.diagnostics:
             print(f"Αποτυχία: {exc.diagnostics}")
         raise
+    if difficulty == "easy":
+        result = finalize_puzzle_hints(result, difficulty="easy")
+    else:
+        validate_puzzle_hints(result)
     render_printable_html(
         result.grid,
         result.clue_words or result.words,
@@ -75,12 +100,33 @@ def do_generate(
         show_letters=False,
         css_href=css_href,
         helper=result.helper,
-        prefilled_letters=prefilled_letters(result),
+        puzzle_hints=result.puzzle_hints,
+        prefilled_letters=prefilled_letters_from_hints(result),
+        difficulty=difficulty,
     )
     clue_count = len(result.clue_words or result.words)
-    _save_meta(seed, size, clue_count, result=result)
+    _save_meta(seed, size, clue_count, result=result, difficulty=difficulty)
     print(f"Έτοιμο: {HTML_PATH}")
-    if result.helper is not None:
+    hints = result.puzzle_hints
+    if hints is not None:
+        d1 = "Οριζόντια" if hints.primary_helper.helper_direction == "across" else "Κάθετα"
+        print(
+            f"Βοήθεια 1: #{hints.primary_helper.helper_entry_id} "
+            f"{hints.primary_helper.helper_word} ({d1})"
+        )
+        if hints.secondary_helper is not None:
+            d2 = (
+                "Οριζόντια"
+                if hints.secondary_helper.helper_direction == "across"
+                else "Κάθετα"
+            )
+            print(
+                f"Βοήθεια 2: #{hints.secondary_helper.helper_entry_id} "
+                f"{hints.secondary_helper.helper_word} ({d2})"
+            )
+        if hints.extra_hint_cells:
+            print(f"Επιπλέον γράμματα: {hints.extra_letter_count}")
+    elif result.helper is not None:
         direction = "Οριζόντια" if result.helper.helper_direction == "across" else "Κάθετα"
         print(
             f"Βοήθεια: #{result.helper.helper_entry_id} {result.helper.helper_word} ({direction})"
@@ -90,6 +136,7 @@ def do_generate(
         "words": clue_count,
         "size": result.grid.size,
         "path": str(HTML_PATH),
+        "difficulty": difficulty,
     }
 
 
@@ -150,6 +197,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Επανάχρηση ίδιας λέξης σε πολλά slots",
     )
     parser.add_argument(
+        "--difficulty",
+        choices=["normal", "easy"],
+        default="normal",
+        help="Κανονικό ή εύκολο mode (περισσότερη βοήθεια στο πλέγμα)",
+    )
+    parser.add_argument(
         "--generate",
         action="store_true",
         help="Δημιουργία χωρίς διαδραστικό μενού",
@@ -162,7 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.generate:
-        do_generate(seed=args.seed, size=args.size, allow_reuse=args.allow_reuse)
+        do_generate(
+            seed=args.seed,
+            size=args.size,
+            allow_reuse=args.allow_reuse,
+            difficulty=parse_difficulty(args.difficulty),
+        )
         if args.open:
             do_open_preview()
         return 0

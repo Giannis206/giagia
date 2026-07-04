@@ -599,6 +599,8 @@ class GenerationResult:
     helper: "HelperWordInfo | None" = None
     clue_words: list[str] | None = None
     word_scores: dict[str, int] | None = None
+    difficulty: str = "normal"
+    puzzle_hints: "PuzzleHints | None" = None
 
 
 def _grid_from_pattern_rows(size: int, rows: list[str]) -> Grid:
