@@ -25,6 +25,7 @@ from crossword.patterns import (
     PatternEntry,
     entry_is_hand_primary,
     entry_is_core_10,
+    entry_is_core_12,
     get_pattern_catalog,
     get_patterns,
     pattern_to_grid,
@@ -798,8 +799,8 @@ def _try_pattern_fill(
     tracker = get_pattern_stats_tracker()
     presearch: PresearchAnalysis | None = None
     skip_presearch = (
-        (size == 12 and pattern_entry is not None and entry_is_hand_primary(pattern_entry))
-        or (size == 10 and pattern_entry is not None and entry_is_core_10(pattern_entry))
+        (size == 10 and pattern_entry is not None and entry_is_core_10(pattern_entry))
+        or (size == 12 and pattern_entry is not None and entry_is_core_12(pattern_entry))
     )
     if enable_presearch and size >= 10 and not skip_presearch:
         presearch = analyze_presearch(
@@ -862,7 +863,9 @@ def _try_pattern_fill(
             needs_probe = catalog_tier == "probation" or (
                 presearch.ac3_is_uninformative and catalog_tier != "core_catalog"
             )
-            if needs_probe and not tracker.is_core_catalog(pattern_id, presearch=presearch):
+            if needs_probe and not tracker.is_core_catalog(
+                pattern_id, presearch=presearch, grid_size=10,
+            ):
                 probe_ok, probe_trace = quick_fill_probe(
                     grid,
                     slots,
@@ -882,12 +885,19 @@ def _try_pattern_fill(
                     _reject_presearch(quick_probe=True, trace=probe_trace)
                     return None
         elif size == 12:
-            if should_apply_static_presearch_reject(
-                presearch, pattern_id=pattern_id, pattern_entry=pattern_entry,
-            ):
+            slot_max_len = pattern_entry.max_slot_length if pattern_entry else 0
+            catalog_tier = tracker.get_catalog_tier_12(
+                pattern_id, presearch=presearch, max_slot_length=slot_max_len,
+            )
+            if catalog_tier == "reject":
                 _reject_presearch()
                 return None
-            if presearch.ac3_is_uninformative:
+            needs_probe = catalog_tier == "probation" or (
+                presearch.ac3_is_uninformative and catalog_tier != "core_catalog"
+            )
+            if needs_probe and not tracker.is_core_catalog(
+                pattern_id, presearch=presearch, grid_size=12,
+            ):
                 probe_ok, probe_trace = quick_fill_probe(
                     grid,
                     slots,
@@ -896,14 +906,21 @@ def _try_pattern_fill(
                     rng,
                     grid_size=size,
                 )
+                tracker.record_quick_probe_outcome(
+                    pattern_id,
+                    probe_ok=probe_ok,
+                    nodes=probe_trace.nodes,
+                    max_depth=probe_trace.max_depth,
+                    hit_deadline=probe_trace.hit_deadline,
+                )
                 if not probe_ok:
                     _reject_presearch(quick_probe=True, trace=probe_trace)
                     return None
 
     if pattern_entry is not None and not pattern_entry.fillability_passed:
         if not (
-            (size == 12 and entry_is_hand_primary(pattern_entry))
-            or (size == 10 and entry_is_core_10(pattern_entry))
+            (size == 10 and entry_is_core_10(pattern_entry))
+            or (size == 12 and entry_is_core_12(pattern_entry))
         ):
             diag.fillability_rejects += 1
             return None
@@ -948,9 +965,27 @@ def _try_pattern_fill(
     pattern_t0 = time.monotonic()
     base_cap = pattern_time_cap if pattern_time_cap is not None else budget.pattern_time_cap
     if size == 10:
-        cap = tracker.adaptive_time_cap_for_tier(pattern_id, base_cap, presearch=presearch)
+        cap = tracker.adaptive_time_cap_for_tier(
+            pattern_id, base_cap, presearch=presearch, grid_size=10,
+        )
         node_budget = tracker.adaptive_max_nodes_for_tier(
-            pattern_id, budget.max_nodes, presearch=presearch,
+            pattern_id, budget.max_nodes, presearch=presearch, grid_size=10,
+        )
+    elif size == 12:
+        slot_max_len = pattern_entry.max_slot_length if pattern_entry else 0
+        cap = tracker.adaptive_time_cap_for_tier(
+            pattern_id,
+            base_cap,
+            presearch=presearch,
+            grid_size=12,
+            max_slot_length=slot_max_len,
+        )
+        node_budget = tracker.adaptive_max_nodes_for_tier(
+            pattern_id,
+            budget.max_nodes,
+            presearch=presearch,
+            grid_size=12,
+            max_slot_length=slot_max_len,
         )
     else:
         cap = tracker.adaptive_time_cap(pattern_id, base_cap)
@@ -1161,8 +1196,7 @@ def generate_crossword(
         catalog_deadline = t0 + budget.total_seconds * CATALOG_TIME_FRACTION.get(size, 0.85)
         max_catalog = MAX_CATALOG_PATTERNS.get(size, len(pattern_order))
         if size == 12:
-            late_12_entries = pattern_order[1:P12_HAND_CATALOG_LIMIT + 2]
-            catalog_phases = [pattern_order[:1]]
+            catalog_phases = [pattern_order[:max_catalog]]
         else:
             catalog_phases = [pattern_order[:max_catalog]]
         pattern_fail_streak = 0

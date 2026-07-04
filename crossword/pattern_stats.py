@@ -247,18 +247,46 @@ class PatternStatsTracker:
 
         if pattern_id in self._catalog_tier:
             return self._catalog_tier[pattern_id]
-        load_profiles_from_diagnostics()
+        load_profiles_from_diagnostics(grid_size=10)
         tier = classify_pattern_10(pattern_id, presearch=presearch, tracker=self)
         self._catalog_tier[pattern_id] = tier
         return tier
 
-    def is_core_catalog(self, pattern_id: str, *, presearch=None) -> bool:
+    def get_catalog_tier_12(
+        self,
+        pattern_id: str,
+        *,
+        presearch=None,
+        max_slot_length: int | None = None,
+    ) -> CatalogTier:
+        from crossword.pattern_classification import classify_pattern_12, load_profiles_from_diagnostics
+
+        cache_key = f"12:{pattern_id}"
+        if cache_key in self._catalog_tier:
+            return self._catalog_tier[cache_key]
+        load_profiles_from_diagnostics(grid_size=12)
+        tier = classify_pattern_12(
+            pattern_id,
+            presearch=presearch,
+            tracker=self,
+            max_slot_length=max_slot_length,
+        )
+        self._catalog_tier[cache_key] = tier
+        return tier
+
+    def is_core_catalog(self, pattern_id: str, *, presearch=None, grid_size: int = 10) -> bool:
+        if grid_size == 12:
+            return self.get_catalog_tier_12(pattern_id, presearch=presearch) == "core_catalog"
         return self.get_catalog_tier_10(pattern_id, presearch=presearch) == "core_catalog"
 
-    def is_probation(self, pattern_id: str, *, presearch=None) -> bool:
+    def is_probation(self, pattern_id: str, *, presearch=None, grid_size: int = 10) -> bool:
+        if grid_size == 12:
+            return self.get_catalog_tier_12(pattern_id, presearch=presearch) == "probation"
         return self.get_catalog_tier_10(pattern_id, presearch=presearch) == "probation"
 
-    def is_reject_tier(self, pattern_id: str, *, presearch=None) -> bool:
+    def is_reject_tier(self, pattern_id: str, *, presearch=None, grid_size: int = 10) -> bool:
+        if grid_size == 12:
+            return self.get_catalog_tier_12(pattern_id, presearch=presearch) == "reject"
         return self.get_catalog_tier_10(pattern_id, presearch=presearch) == "reject"
 
     def demote_to_reject(self, pattern_id: str) -> None:
@@ -283,6 +311,8 @@ class PatternStatsTracker:
         hit_deadline: bool = False,
     ) -> None:
         """Demote probation patterns with clearly bad quick-probe behavior."""
+        if pattern_id.startswith("p12_"):
+            return
         if probe_ok:
             if nodes >= 80 or max_depth >= 5:
                 return
@@ -292,8 +322,25 @@ class PatternStatsTracker:
         elif nodes < 30:
             self.demote_to_reject(pattern_id)
 
-    def adaptive_time_cap_for_tier(self, pattern_id: str, default_cap: float, *, presearch=None) -> float:
+    def adaptive_time_cap_for_tier(
+        self,
+        pattern_id: str,
+        default_cap: float,
+        *,
+        presearch=None,
+        grid_size: int = 10,
+        max_slot_length: int | None = None,
+    ) -> float:
         cap = self.adaptive_time_cap(pattern_id, default_cap)
+        if grid_size == 12:
+            tier = self.get_catalog_tier_12(
+                pattern_id, presearch=presearch, max_slot_length=max_slot_length,
+            )
+            if tier == "core_catalog":
+                return min(default_cap, max(cap, default_cap * 0.95))
+            if tier == "probation":
+                return min(cap, 6.0)
+            return min(cap, 2.5)
         tier = self.get_catalog_tier_10(pattern_id, presearch=presearch)
         if tier == "core_catalog":
             if pattern_id.startswith("p10_core_"):
@@ -304,9 +351,24 @@ class PatternStatsTracker:
         return min(cap, 2.0)
 
     def adaptive_max_nodes_for_tier(
-        self, pattern_id: str, default_nodes: int, *, presearch=None,
+        self,
+        pattern_id: str,
+        default_nodes: int,
+        *,
+        presearch=None,
+        grid_size: int = 10,
+        max_slot_length: int | None = None,
     ) -> int:
         nodes = self.adaptive_max_nodes(pattern_id, default_nodes)
+        if grid_size == 12:
+            tier = self.get_catalog_tier_12(
+                pattern_id, presearch=presearch, max_slot_length=max_slot_length,
+            )
+            if tier == "core_catalog":
+                return nodes
+            if tier == "probation":
+                return min(nodes, 4500)
+            return min(nodes, 2000)
         tier = self.get_catalog_tier_10(pattern_id, presearch=presearch)
         if tier == "core_catalog":
             if pattern_id.startswith("p10_core_"):

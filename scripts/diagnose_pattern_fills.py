@@ -17,8 +17,10 @@ from crossword.dictionary import load_dictionary
 from crossword.patterns import get_pattern_entries, pattern_to_grid
 from crossword.slots import extract_slots
 from crossword.pattern_classification import (
+    list_patterns_12_inventory,
     load_profiles_from_diagnostics,
     summarize_diagnostics_10,
+    summarize_diagnostics_12,
 )
 from crossword.solve_diagnostics import (
     PatternAttemptDiagnostic,
@@ -26,6 +28,7 @@ from crossword.solve_diagnostics import (
     analyze_presearch,
 )
 from crossword.pattern_stats import get_pattern_stats_tracker
+from crossword.helper_word import validate_helper_word
 from crossword.solver import CrosswordGenerationError, generate_crossword
 
 
@@ -68,12 +71,14 @@ def run_seeds(
                 word_store=None,
                 attempt_diags=attempt_diags,
             )
+            validate_helper_word(result)
             elapsed = time.perf_counter() - t0
             run_rows.append({
                 "seed": seed,
                 "success": True,
                 "elapsed_s": round(elapsed, 2),
                 "pattern_id": result.pattern_id,
+                "helper_word": result.helper.helper_word if result.helper else None,
                 "attempts": len(attempt_diags),
             })
         except CrosswordGenerationError as exc:
@@ -176,6 +181,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  with_success: {tier_summary['with_success']}")
         report["prior_tier_summary_10"] = tier_summary
 
+    if 12 in sizes:
+        print("\n=== 12x12 pattern inventory ===")
+        for row in list_patterns_12_inventory(get_pattern_stats_tracker()):
+            print(
+                f"  {row['pattern_id']:22} {row['kind']:15} "
+                f"tier={row['tier']:14} succ={row['successes']:3} "
+                f"avg={row['avg_fill_s']:5.1f}s max_slot={row['max_slot_length']}"
+            )
+        tier12 = summarize_diagnostics_12(args.out.parent / "fill_diagnostics.json")
+        print(f"\n=== prior diagnostics tier summary (12x12) ===")
+        print(f"  by_tier: {tier12['by_tier']}")
+        print(f"  with_success: {tier12['with_success']}")
+        report["prior_tier_summary_12"] = tier12
+
     for size in sizes:
         print(f"\n=== presearch scan {size}x{size} ===")
         presearch_rows = scan_catalog_presearch(size, dictionary)
@@ -204,6 +223,17 @@ def main(argv: list[str] | None = None) -> int:
             tiers = get_pattern_stats_tracker().summary()
             core = [p for p, s in tiers.items() if s.get("successes", 0) > 0]
             print(f"  runtime core promotions: {core}")
+        if size == 12:
+            from crossword.pattern_classification import partition_catalog_entries_12
+            from crossword.patterns import get_pattern_entries
+
+            selectable = [e for e in get_pattern_entries(12) if e.tier != "archive"]
+            core, probation, reject = partition_catalog_entries_12(selectable, tracker=None)
+            helpers = [r.get("helper_word") for r in run_rows if r["success"]]
+            print(f"  core patterns: {[e.id for e in core]}")
+            print(f"  probation patterns: {[e.id for e in probation]}")
+            print(f"  reject patterns: {[e.id for e in reject]}")
+            print(f"  helper words: {helpers}")
         print(f"  avg failed runtime: {summary['avg_failed_runtime_s']}s")
         print(f"  avg late-fail runtime: {summary['avg_late_fail_runtime_s']}s")
         print(f"  failure classes: {summary['failure_class_counts']}")

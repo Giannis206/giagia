@@ -15,6 +15,7 @@ from crossword.grid import BLACK, Grid, WHITE
 from crossword.pattern_classification import (
     load_profiles_from_diagnostics,
     partition_catalog_entries_10,
+    partition_catalog_entries_12,
 )
 from crossword.slots import extract_slots
 from crossword.slot_policy import slot_length_histogram
@@ -72,14 +73,14 @@ _P10_CORE_ORDER = (
 
 P10_CORE_COUNT = len(_P10_CORE_ORDER)
 
-MAX_CATALOG_PATTERNS: dict[int, int] = {
-    10: P10_CORE_COUNT + 4,
-    12: 3,
-}
-
 # Hand-tuned 12x12 catalog attempts before any discovered late fallback.
 P12_PRIMARY_COUNT = len(_P12_HAND_PRIMARY_ORDER)
 P12_HAND_CATALOG_LIMIT = P12_PRIMARY_COUNT + len(_P12_FALLBACK_IDS)
+
+MAX_CATALOG_PATTERNS: dict[int, int] = {
+    10: P10_CORE_COUNT + 4,
+    12: P12_PRIMARY_COUNT + 2,
+}
 
 
 def entry_is_hand_primary(entry: PatternEntry) -> bool:
@@ -88,6 +89,15 @@ def entry_is_hand_primary(entry: PatternEntry) -> bool:
 
 def entry_is_core_10(entry: PatternEntry) -> bool:
     return entry.id in _P10_CORE_IDS
+
+
+def entry_is_core_12(entry: PatternEntry) -> bool:
+    from crossword.pattern_classification import classify_pattern_12
+
+    return classify_pattern_12(
+        entry.id,
+        max_slot_length=entry.max_slot_length,
+    ) == "core_catalog"
 
 
 def is_core_10_pattern_id(pattern_id: str) -> bool:
@@ -885,21 +895,22 @@ def select_pattern_order(
 ) -> list[PatternEntry]:
     """Weighted primary-then-fallback order for catalog-backed sizes."""
     if size == 12 and not include_legacy_12:
-        by_id = {
-            e.id: e
-            for e in get_pattern_entries(12, tier="primary")
-            if e.id in _P12_HAND_PRIMARY_IDS
-        }
-        primary = [by_id[pid] for pid in _P12_HAND_PRIMARY_ORDER if pid in by_id]
-        hand_fb = [
-            e for e in get_pattern_entries(12, tier="fallback")
-            if e.id in _P12_FALLBACK_IDS
+        load_profiles_from_diagnostics(grid_size=12)
+        selectable = [
+            e for e in get_pattern_entries(12)
+            if e.tier != "archive"
         ]
-        late = _discovered_12_runtime_fallback(tracker)
+        core, probation, _reject = partition_catalog_entries_12(
+            selectable, tracker=tracker,
+        )
+        by_id = {e.id: e for e in core}
+        core_ordered = [by_id[pid] for pid in _P12_HAND_PRIMARY_ORDER if pid in by_id]
+        for entry in core:
+            if entry.id not in _P12_HAND_PRIMARY_ORDER:
+                core_ordered.append(entry)
         return (
-            primary
-            + weighted_pattern_order(hand_fb, rng, tracker)
-            + weighted_pattern_order(late, rng, tracker)
+            core_ordered
+            + weighted_pattern_order(probation, rng, tracker)
         )
     if size == 10:
         load_profiles_from_diagnostics()

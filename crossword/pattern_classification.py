@@ -1,4 +1,4 @@
-"""Data-driven 10x10 catalog tiers from diagnostics and runtime memory."""
+"""Data-driven catalog tiers from diagnostics and runtime memory (10x10 & 12x12)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,12 @@ _PROBATION_FILLABILITY_FLOOR = 17.0
 _LATE_TIME_REJECT_AVG_S = 10.0
 _LATE_TIME_REJECT_COUNT = 2
 _PRESEARCH_REJECT_DEMOTE = 2
+
+# 12x12: pattern cap is ~8s; core needs proven fills at reasonable wall time.
+_LATE_TIME_REJECT_AVG_S_12 = 14.0
+_CORE_MAX_AVG_FILL_S_12 = 12.0
+_SLOW_SUCCESS_AVG_S_12 = 18.0
+_FALLBACK_REJECT_MAX_SLOT_12 = 10
 
 
 @dataclass
@@ -50,7 +56,30 @@ class PatternRuntimeProfile:
 
     @property
     def is_catalog(self) -> bool:
-        return self.pattern_id.startswith("p10_")
+        return self.pattern_id.startswith("p10_") or self.pattern_id.startswith("p12_")
+
+    @property
+    def is_hand_primary_12(self) -> bool:
+        return self.pattern_id in _P12_HAND_PRIMARY_IDS
+
+    @property
+    def is_hand_fallback_12(self) -> bool:
+        return self.pattern_id in _P12_FALLBACK_IDS
+
+
+# Imported lazily in helpers to avoid circular imports at module load.
+_P12_HAND_PRIMARY_IDS: frozenset[str] = frozenset()
+_P12_FALLBACK_IDS: frozenset[str] = frozenset()
+
+
+def _ensure_12_ids() -> None:
+    global _P12_HAND_PRIMARY_IDS, _P12_FALLBACK_IDS
+    if _P12_HAND_PRIMARY_IDS:
+        return
+    from crossword.patterns import _P12_HAND_PRIMARY_IDS as hp, _P12_FALLBACK_IDS as fb
+
+    _P12_HAND_PRIMARY_IDS = hp
+    _P12_FALLBACK_IDS = fb
 
 
 _PROFILES: dict[str, PatternRuntimeProfile] = {}
@@ -124,6 +153,216 @@ def load_profiles_from_diagnostics(
 
     _PROFILES.update(profiles)
     return profiles
+
+
+def _runtime_avg_fill_s(pattern_id: str, tracker: PatternStatsTracker | None) -> float | None:
+    if tracker is None:
+        return None
+    stats = tracker.get(pattern_id)
+    if stats.successes > 0:
+        return stats.avg_fill_seconds
+    persisted = tracker._persisted.get(pattern_id)
+    if persisted and persisted.successes > 0:
+        return persisted.avg_fill_seconds
+    return None
+
+
+def _has_proven_core_fill_12(
+    pattern_id: str,
+    *,
+    tracker: PatternStatsTracker | None,
+    prof: PatternRuntimeProfile | None,
+) -> bool:
+    """Core when we have successes at reasonable runtime (not slow outliers)."""
+    avg = _runtime_avg_fill_s(pattern_id, tracker)
+    if avg is not None and avg > _SLOW_SUCCESS_AVG_S_12:
+        return False
+    if tracker is not None and tracker.has_runtime_success(pattern_id):
+        if avg is not None and avg <= _CORE_MAX_AVG_FILL_S_12:
+            return True
+        if avg is None:
+            return True
+    if prof is not None and prof.successes >= 1:
+        if prof.avg_solve_seconds <= _CORE_MAX_AVG_FILL_S_12:
+            return True
+    return False
+
+
+def classify_pattern_12(
+    pattern_id: str,
+    *,
+    presearch: PresearchAnalysis | None = None,
+    tracker: PatternStatsTracker | None = None,
+    profiles: dict[str, PatternRuntimeProfile] | None = None,
+    max_slot_length: int | None = None,
+) -> CatalogTier:
+    """Assign core_catalog / probation / reject for a 12x12 pattern."""
+    _ensure_12_ids()
+    override = get_tier_override(pattern_id)
+    if override is not None:
+        return override
+
+    profiles = profiles if profiles is not None else _PROFILES
+    prof = profiles.get(pattern_id)
+
+    if _has_proven_core_fill_12(pattern_id, tracker=tracker, prof=prof):
+        return "core_catalog"
+
+    if tracker is not None:
+        stats = tracker.get(pattern_id)
+        if stats.presearch_rejects >= _PRESEARCH_REJECT_DEMOTE and stats.successes == 0:
+            return "reject"
+        if stats.late_failures >= _LATE_TIME_REJECT_COUNT and stats.successes == 0:
+            return "reject"
+
+    if prof is not None:
+        if prof.late_time >= _LATE_TIME_REJECT_COUNT and prof.avg_solve_seconds >= _LATE_TIME_REJECT_AVG_S_12:
+            return "reject"
+        if prof.presearch_rejects >= 3 and prof.successes == 0 and prof.solve_elapsed == []:
+            return "reject"
+        if prof.quick_probe_fails >= 2:
+            return "reject"
+
+    if pattern_id.startswith("random_seed"):
+        if prof and prof.late_time >= 2 and prof.successes == 0:
+            return "reject"
+        if prof and prof.successes >= 1:
+            return "core_catalog"
+        return "probation"
+
+    is_hand_primary = pattern_id in _P12_HAND_PRIMARY_IDS
+    is_hand_fallback = pattern_id in _P12_FALLBACK_IDS
+
+    if is_hand_fallback and max_slot_length is not None:
+        if max_slot_length > _FALLBACK_REJECT_MAX_SLOT_12 and not (
+            tracker and tracker.has_runtime_success(pattern_id)
+        ):
+            return "reject"
+
+    scan = (presearch.to_dict() if presearch is not None else None) or (
+        prof.presearch_scan if prof else None
+    )
+
+    if scan is not None and not scan.get("ac3_ok", True):
+        return "reject"
+
+    if is_hand_primary or is_hand_fallback:
+        return "probation"
+
+    if pattern_id.startswith("p12_"):
+        return "reject"
+
+    return "probation"
+
+
+def partition_catalog_entries_12(
+    entries: list,
+    *,
+    tracker: PatternStatsTracker | None = None,
+) -> tuple[list, list, list]:
+    """Split PatternEntry lists into (core, probation, reject) for size 12."""
+    core: list = []
+    probation: list = []
+    reject: list = []
+    for entry in entries:
+        tier = classify_pattern_12(
+            entry.id,
+            tracker=tracker,
+            max_slot_length=getattr(entry, "max_slot_length", None),
+        )
+        if tier == "core_catalog":
+            core.append(entry)
+        elif tier == "probation":
+            probation.append(entry)
+        else:
+            reject.append(entry)
+    return core, probation, reject
+
+
+def summarize_diagnostics_12(path: Path | None = None) -> dict:
+    """Human-readable summary from fill_diagnostics.json for size=12."""
+    profiles = load_profiles_from_diagnostics(path, grid_size=12)
+    by_tier: dict[str, list[str]] = {
+        "core_catalog": [],
+        "probation": [],
+        "reject": [],
+    }
+    with_success: list[str] = []
+
+    for pid, prof in sorted(profiles.items()):
+        tier = classify_pattern_12(pid, profiles=profiles)
+        by_tier[tier].append(pid)
+        if prof.successes > 0:
+            with_success.append(pid)
+
+    return {
+        "total_patterns": len(profiles),
+        "by_tier": {k: len(v) for k, v in by_tier.items()},
+        "tier_patterns": by_tier,
+        "with_success": with_success,
+        "profiles": {
+            pid: {
+                "attempts": p.attempts,
+                "successes": p.successes,
+                "presearch_rejects": p.presearch_rejects,
+                "late_time": p.late_time,
+                "avg_solve_s": round(p.avg_solve_seconds, 2),
+                "tier": classify_pattern_12(pid, profiles=profiles),
+            }
+            for pid, p in profiles.items()
+        },
+    }
+
+
+def list_patterns_12_inventory(tracker: PatternStatsTracker | None = None) -> list[dict]:
+    """Inventory of 12x12 catalog entries with kind and runtime stats (for logs)."""
+    _ensure_12_ids()
+    from crossword.patterns import (
+        _P12_HAND_PRIMARY_ORDER,
+        entry_is_discovered_12,
+        get_pattern_entries,
+    )
+
+    rows: list[dict] = []
+    for entry in get_pattern_entries(12):
+        if entry.tier == "archive":
+            kind = "discovered_archive"
+        elif entry.id in _P12_HAND_PRIMARY_IDS:
+            kind = "hand_primary"
+        elif entry.id in _P12_FALLBACK_IDS:
+            kind = "hand_fallback"
+        elif entry_is_discovered_12(entry):
+            kind = "discovered"
+        else:
+            kind = "legacy"
+        stats = tracker.get(entry.id) if tracker else None
+        persisted = tracker._persisted.get(entry.id) if tracker else None
+        successes = (stats.successes if stats else 0) + (
+            persisted.successes if persisted else 0
+        )
+        attempts = (stats.attempts if stats else 0) + (
+            persisted.attempts if persisted else 0
+        )
+        avg_s = stats.avg_fill_seconds if stats and stats.successes else 0.0
+        if avg_s == 0.0 and persisted and persisted.successes:
+            avg_s = persisted.avg_fill_seconds
+        tier = classify_pattern_12(
+            entry.id,
+            tracker=tracker,
+            max_slot_length=entry.max_slot_length,
+        )
+        rows.append({
+            "pattern_id": entry.id,
+            "kind": kind,
+            "tier": tier,
+            "successes": successes,
+            "attempts": attempts,
+            "avg_fill_s": round(avg_s, 2),
+            "max_slot_length": entry.max_slot_length,
+        })
+    order = {pid: idx for idx, pid in enumerate(_P12_HAND_PRIMARY_ORDER)}
+    rows.sort(key=lambda r: (order.get(r["pattern_id"], 99), r["pattern_id"]))
+    return rows
 
 
 def _rank_catalog_probation_candidates(
