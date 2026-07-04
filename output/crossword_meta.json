@@ -1,5 +1,40 @@
 {
-  "seed": 327832019,
-  "size": 8,
-  "word_count": 20
+  "seed": 600928698,
+  "size": 7,
+  "word_count": 15,
+  "helper": {
+    "helper_entry_id": 3,
+    "helper_word": "ΤΟΣΚΑΝΗ",
+    "helper_direction": "down",
+    "helper_cells": [
+      [
+        0,
+        2
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        3,
+        2
+      ],
+      [
+        4,
+        2
+      ],
+      [
+        5,
+        2
+      ],
+      [
+        6,
+        2
+      ]
+    ]
+  }
 }

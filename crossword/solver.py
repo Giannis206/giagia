@@ -597,6 +597,7 @@ class GenerationResult:
     pattern_id: str = ""
     helper: "HelperWordInfo | None" = None
     clue_words: list[str] | None = None
+    word_scores: dict[str, int] | None = None
 
 
 def _grid_from_pattern_rows(size: int, rows: list[str]) -> Grid:
@@ -719,7 +720,13 @@ def _attempt_fill(
         attempt_diag.trace = trace
         attempt_diag.failure_class = "success"
         attempt_diag.is_late_fail = False
-    return GenerationResult(grid=solver.grid, slots=slots, state=state, words=words)
+    return GenerationResult(
+        grid=solver.grid,
+        slots=slots,
+        state=state,
+        words=words,
+        word_scores=word_scores,
+    )
 
 
 def _try_pattern_fill(

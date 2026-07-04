@@ -14,57 +14,84 @@
 <body>
   <section class="page page-grid" aria-label="Σελίδα πλέγματος">
     <h1 class="visually-hidden">Σταυρόλεξο — Πλέγμα</h1>
+    
+    <p class="helper-note">Μία λέξη δίνεται στο πλέγμα ως βοήθεια (γκρι κελιά).</p>
+    
     <div class="grid-wrap">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" class="crossword-svg" role="img" aria-label="Πλέγμα σταυρόλεξου" shape-rendering="geometricPrecision">
-<rect x="0" y="0" width="800" height="800" fill="#ffffff"/>
-<rect x="0" y="0" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="100" y="0" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="200" y="0" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="0" y="100" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="100" y="100" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="400" y="300" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="300" y="400" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="600" y="600" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="700" y="600" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="500" y="700" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="600" y="700" width="100" height="100" fill="#000000" stroke="none"/>
-<rect x="700" y="700" width="100" height="100" fill="#000000" stroke="none"/>
-<line x1="0" y1="0" x2="0" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="0" x2="800" y2="0" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="100" y1="0" x2="100" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="100" x2="800" y2="100" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="200" y1="0" x2="200" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="200" x2="800" y2="200" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="300" y1="0" x2="300" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="300" x2="800" y2="300" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="400" y1="0" x2="400" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="400" x2="800" y2="400" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="500" y1="0" x2="500" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="500" x2="800" y2="500" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="600" y1="0" x2="600" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="600" x2="800" y2="600" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="700" y1="0" x2="700" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="700" x2="800" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="800" y1="0" x2="800" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
-<line x1="0" y1="800" x2="800" y2="800" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 700" class="crossword-svg" role="img" aria-label="Πλέγμα σταυρόλεξου" shape-rendering="geometricPrecision">
+<rect x="0" y="0" width="700" height="700" fill="#ffffff"/>
+<rect x="500" y="0" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="600" y="0" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="600" y="100" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="600" y="200" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="300" y="300" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="0" y="400" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="0" y="500" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="0" y="600" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="100" y="600" width="100" height="100" fill="#000000" stroke="none"/>
+<rect x="200" y="0" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="100" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="200" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="300" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="400" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="500" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<rect x="200" y="600" width="100" height="100" fill="#ececec" stroke="none" class="helper-cell"/>
+<line x1="0" y1="0" x2="0" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="0" x2="700" y2="0" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="100" y1="0" x2="100" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="100" x2="700" y2="100" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="200" y1="0" x2="200" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="200" x2="700" y2="200" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="300" y1="0" x2="300" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="300" x2="700" y2="300" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="400" y1="0" x2="400" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="400" x2="700" y2="400" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="500" y1="0" x2="500" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="500" x2="700" y2="500" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="600" y1="0" x2="600" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="600" x2="700" y2="600" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="700" y1="0" x2="700" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<line x1="0" y1="700" x2="700" y2="700" stroke="#000000" stroke-width="8" stroke-linecap="square"/>
+<text x="12.0" y="24.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">1</text>
+<text x="112.0" y="24.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">2</text>
+<text x="212.0" y="24.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">3</text>
+<text x="312.0" y="24.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">4</text>
+<text x="412.0" y="24.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">5</text>
+<text x="12.0" y="124.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">6</text>
+<text x="512.0" y="124.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">7</text>
+<text x="12.0" y="224.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">8</text>
+<text x="12.0" y="324.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">9</text>
+<text x="412.0" y="324.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">10</text>
+<text x="612.0" y="324.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">11</text>
+<text x="112.0" y="424.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">12</text>
+<text x="312.0" y="424.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">13</text>
+<text x="112.0" y="524.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">14</text>
+<text x="212.0" y="624.0" text-anchor="start" dominant-baseline="hanging" font-family="Segoe UI, Arial, sans-serif" font-size="22.0" font-weight="700" fill="#000000">15</text>
+<text x="250.0" y="50.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Τ</text>
+<text x="250.0" y="150.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Ο</text>
+<text x="250.0" y="250.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Σ</text>
+<text x="250.0" y="350.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Κ</text>
+<text x="250.0" y="450.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Α</text>
+<text x="250.0" y="550.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Ν</text>
+<text x="250.0" y="650.0" text-anchor="middle" dominant-baseline="central" font-family="Segoe UI, Arial, sans-serif" font-size="58.0" font-weight="700" fill="#1a1a1a" class="helper-letter">Η</text>
 </svg>
     </div>
   </section>
 
   <section class="page page-words words-sparse" aria-label="Σελίδα λέξεων">
-    <h1 class="words-title">Λέξεις (20)</h1>
+    <h1 class="words-title">Λέξεις (15)</h1>
     
     <div class="word-group">
       <h2>3 γράμματα</h2>
       <ul class="word-list">
         
-        <li>ΕΑΙ</li>
+        <li>ΖΗΚ</li>
         
-        <li>ΟΥΣ</li>
+        <li>ΙΣΟ</li>
         
-        <li>ΡΑΛ</li>
+        <li>ΛΑΝ</li>
         
-        <li>ΧΑΣ</li>
+        <li>ΡΟΛ</li>
         
       </ul>
     </div>
@@ -73,13 +100,9 @@
       <h2>4 γράμματα</h2>
       <ul class="word-list">
         
-        <li>ΒΙΝΣ</li>
+        <li>ΛΑΤΖ</li>
         
-        <li>ΒΙΡΑ</li>
-        
-        <li>ΝΟΕΛ</li>
-        
-        <li>ΣΤΗΛ</li>
+        <li>ΝΕΑΣ</li>
         
       </ul>
     </div>
@@ -88,9 +111,9 @@
       <h2>5 γράμματα</h2>
       <ul class="word-list">
         
-        <li>ΑΝΕΙΣ</li>
+        <li>ΗΛΙΑΣ</li>
         
-        <li>ΝΟΒΑΚ</li>
+        <li>ΛΑΤΙΦ</li>
         
       </ul>
     </div>
@@ -99,17 +122,17 @@
       <h2>6 γράμματα</h2>
       <ul class="word-list">
         
-        <li>ΑΝΙΑΡΟ</li>
+        <li>ΑΝΟΗΤΕ</li>
         
-        <li>ΑΣΧΕΤΑ</li>
+        <li>ΑΝΟΣΟΙ</li>
         
-        <li>ΚΙΟΛΑΣ</li>
+        <li>ΕΝΟΡΙΑ</li>
         
-        <li>ΣΟΥΙΝΙ</li>
+        <li>ΙΣΑΞΙΑ</li>
         
-        <li>ΣΤΑΛΙΝ</li>
+        <li>ΤΑΡΑΞΕ</li>
         
-        <li>ΤΙΤΑΝΑ</li>
+        <li>ΤΟΣΟΥΣ</li>
         
       </ul>
     </div>
@@ -118,20 +141,7 @@
       <h2>7 γράμματα</h2>
       <ul class="word-list">
         
-        <li>ΒΙΤΡΙΝΑ</li>
-        
-        <li>ΣΒΗΣΕΤΕ</li>
-        
-      </ul>
-    </div>
-    
-    <div class="word-group">
-      <h2>8 γράμματα</h2>
-      <ul class="word-list">
-        
-        <li>ΑΣΒΕΣΤΙΟ</li>
-        
-        <li>ΕΛΕΕΙΝΟΣ</li>
+        <li>ΦΟΥΛΑΡΙ</li>
         
       </ul>
     </div>
